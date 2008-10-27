@@ -1,0 +1,35 @@
+---
+name: EBook-Tools
+version: 0.1.0
+author:
+  - 'Zed Pobre <zed@debian.org>'
+abstract: |-
+  An object class for the manipulation and generation of
+  E-books based on IDPF standards
+license: gpl2
+resources:
+  license: http://opensource.org/licenses/gpl-2.0.php
+requires:
+  Archive::Zip: 1.16
+  Date::Manip: 5.44
+  File::MimeInfo: 0.13
+  HTML::TreeBuilder: 3.19
+  Image::Size: 3.1
+  List::MoreUtils: 0.21
+  Palm::Doc: 1.19
+  Palm::PDB: 1.3.0
+  Tie::IxHash: 1.21
+  Time::Local: 1.18
+  XML::Twig: 3.32
+  perl: 5.10.0
+provides:
+  EBook::Tools:
+    file: lib/EBook/Tools.pm
+    version: 0.1.0
+  EBook::Tools::Unpack:
+    file: lib/EBook/Tools/Unpack.pm
+    version: 0.1.0
+generated_by: Module::Build version 0.3
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.2.html
+  version: 1.2
