@@ -3,14 +3,18 @@ use warnings; use strict; use utf8;
 use 5.010; # Needed for smart-match operator
 require Exporter;
 use base qw(Exporter);
-use version; our $VERSION = qv("0.1.0");
-# $Revision: 110 $ $Date: 2008-10-26 23:13:30 -0400 (Sun, 26 Oct 2008) $
+use version; our $VERSION = qv("0.2.0");
+# $Revision: 132 $ $Date: 2008-11-01 15:28:12 -0400 (Sat, 01 Nov 2008) $
+# $Id: Tools.pm 132 2008-11-01 19:28:12Z zed $
 
 #use warnings::unused;
 
-## Perl Critic overrides:
-## RequireBriefOpen seems to be way too brief to be useful
+# Perl Critic overrides:
+## no critic (Package variable)
+# RequireBriefOpen seems to be way too brief to be useful
 ## no critic (RequireBriefOpen)
+# Double-sigils are needed for lexical filehandles in clear print statements
+## no critic (Double-sigil dereference)
 our $debug = 0;
 
 
@@ -56,6 +60,8 @@ both OEBPS v1.2 and OPS/OPF v2.0.
 =over
 
 =item Archive::Zip
+
+=item Data::UUID (or OSSP::UUID)
 
 =item Date::Manip
 
@@ -115,6 +121,7 @@ use HTML::Entities qw(decode_entities _decode_entities %entity2char);
 use Tie::IxHash;
 use Time::Local;
 use XML::Twig;
+use Palm::Doc();
 
 our @EXPORT_OK;
 @EXPORT_OK = qw (
@@ -123,10 +130,12 @@ our @EXPORT_OK;
     &debug
     &fix_datestring
     &find_links
+    &hexstring
     &get_container_rootfile
     &print_memory
     &split_metadata
     &split_pre
+    &strip_script
     &system_tidy_xml
     &system_tidy_xhtml
     &trim
@@ -135,16 +144,6 @@ our @EXPORT_OK;
     &twigelt_fix_opf20_atts
     &twigelt_is_author
     &ymd_validate
-    %dcelements12
-    %dcelements20
-    %nonxmlentity2char
-    %validspecs
-    %publishermap
-    %relatorcodes
-    $tidycmd
-    $tidyxhtmlerrors
-    $tidyxmlerrors
-    $tidysafety
     );
 
 
@@ -342,6 +341,7 @@ our %publishermap = (
     'ballantine books'      => 'Ballantine Books',
     'barnes and noble'      => 'Barnes and Noble Publishing',
     'barnesandnoble.com'    => 'Barnes and Noble Publishing',
+    'cpan'                  => 'CPAN',
     'delrey'                => 'Del Rey Books',
     'del rey'               => 'Del Rey Books',
     'del rey books'         => 'Del Rey Books',
@@ -360,6 +360,12 @@ our %publishermap = (
     'harpercollins'         => 'HarperCollins',
     'harper collins'        => 'HarperCollins',
     'harper-collins'        => 'HarperCollins',
+    'manybooks'             => 'ManyBooks',
+    'manybooks.net'         => 'ManyBooks',
+    'project gutenberg'     => 'Project Gutenberg',
+    'gutenberg'             => 'Project Gutenberg',
+    'gutenberg.org'         => 'Project Gutenberg',
+    'www.gutenberg.org'     => 'Project Gutenberg',
     'randomhouse'           => 'Random House',
     'randomhouse.co.uk'     => 'Random House',
     'www.randomhouse.co.uk' => 'Random House',
@@ -373,7 +379,7 @@ our %publishermap = (
     'wildside'              => 'Wildside Press',
     'wildside press'        => 'Wildside Press',
     );
-        
+
 
 our %nonxmlentity2char = %entity2char;
 delete($nonxmlentity2char{'amp'});
@@ -590,7 +596,7 @@ initialization croaks.
 
 =cut
 
-sub init    ## no critic (Always unpack @_ first)
+sub init :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my ($filename) = @_;
@@ -620,7 +626,8 @@ sub init    ## no critic (Always unpack @_ first)
     
     if(! -f $$self{opffile})
     {
-	croak($subname,"(): '",$$self{opffile},"' does not exist or is not a regular file!")
+	croak($subname,"(): '",$$self{opffile},
+              "' does not exist or is not a regular file!")
     }
 
     if(-z $$self{opffile})
@@ -706,7 +713,7 @@ specified, defaults to "Unknown Title".
 
 =cut
 
-sub init_blank    ## no critic (Always unpack @_ first)
+sub init_blank :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -779,7 +786,7 @@ exists.  Expected values are 'yes' and undef.
 
 =cut
 
-sub adult
+sub adult :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -806,7 +813,7 @@ In scalar context, returns the first contributor, not the last.
 
 =cut
 
-sub contributor_list
+sub contributor_list :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -856,7 +863,7 @@ matches either one (i.e. the logic is OR).
 
 =cut
 
-sub date_list
+sub date_list :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -913,7 +920,7 @@ Returns the description of the e-book, if set, or undef otherwise.
 
 =cut
 
-sub description
+sub description :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -973,7 +980,7 @@ logic is OR).
 
 =cut
 
-sub element_list
+sub element_list :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -1045,7 +1052,7 @@ Returns an arrayref containing any generated error messages.
 
 =cut
 
-sub errors
+sub errors :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1063,7 +1070,7 @@ if it could not be located.
 
 =cut
 
-sub identifier
+sub identifier :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1117,7 +1124,7 @@ matches either one (i.e. the logic is OR).
 
 =cut
 
-sub isbn_list
+sub isbn_list :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -1178,7 +1185,7 @@ matches either one (i.e. the logic is OR).
 
 =cut
 
-sub isbns
+sub isbns :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -1254,7 +1261,7 @@ In scalar context returns the first match, not the last.
 
 =cut
 
-sub languages
+sub languages :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1321,7 +1328,7 @@ L</manifest_hrefs()>, L</spine()>
 
 =cut
 
-sub manifest
+sub manifest :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -1411,7 +1418,7 @@ See also: C<manifest()>, C<spine_idrefs()>
 
 =cut
 
-sub manifest_hrefs
+sub manifest_hrefs :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1448,7 +1455,7 @@ undef if no value is found..
 
 =cut
 
-sub opffile
+sub opffile :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1485,7 +1492,7 @@ Uses L</twigelt_is_author()> in the first half of the search.
 
 =cut
 
-sub primary_author
+sub primary_author :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1514,7 +1521,7 @@ Prints the current list of errors to STDERR.
 
 =cut
 
-sub print_errors
+sub print_errors :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1544,7 +1551,7 @@ Prints the current list of warnings to STDERR.
 
 =cut
 
-sub print_warnings
+sub print_warnings :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1574,7 +1581,7 @@ Prints the OPF file to the default filehandle
 
 =cut
 
-sub print_opf
+sub print_opf :method
 {
     my $self = shift;
     my $filehandle = shift;
@@ -1597,7 +1604,7 @@ In scalar context returns the first match, not the last.
 
 =cut
 
-sub publishers
+sub publishers :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1629,7 +1636,7 @@ Returns undef if the SRP element is not found.
 
 =cut
 
-sub retailprice
+sub retailprice :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1653,7 +1660,7 @@ exists.  Returns undef if one is not found.
 
 =cut
 
-sub review
+sub review :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1687,7 +1694,7 @@ included only because some broken Mobipocket books use it.
 
 =cut
 
-sub rights
+sub rights :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -1742,7 +1749,7 @@ Returns the ID if a match is found, undef otherwise
 
 =cut
 
-sub search_knownuids    ## no critic (Always unpack @_ first)
+sub search_knownuids :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1802,7 +1809,7 @@ Returns the ID if a match is found, undef otherwise.
 
 =cut
 
-sub search_knownuidschemes   ## no critic (Always unpack @_ first)
+sub search_knownuidschemes :method   ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my ($gi) = @_;
@@ -1880,7 +1887,7 @@ until it attempts to enforce it.
 
 =cut
 
-sub spec
+sub spec :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1908,7 +1915,7 @@ See also: L</spine_idrefs()>, L</manifest()>
 
 =cut
 
-sub spine
+sub spine :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -1979,7 +1986,7 @@ See also: L</spine()>, L</manifest_hrefs()>
 
 =cut
 
-sub spine_idrefs
+sub spine_idrefs :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -2014,7 +2021,7 @@ In scalar context, returns the first subject, not the last.
 
 =cut
 
-sub subject_list
+sub subject_list :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -2046,7 +2053,7 @@ no text, returns an empty string.
 
 =cut
 
-sub title
+sub title :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -2074,7 +2081,7 @@ and the result of any subsequent action is not defined.
 
 =cut
 
-sub twig
+sub twig :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -2092,7 +2099,7 @@ methods that use twig or twigroot.
 
 =cut
 
-sub twigcheck
+sub twigcheck :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -2131,7 +2138,7 @@ subsequent action is not defined.
 
 =cut
 
-sub twigroot
+sub twigroot :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -2147,7 +2154,7 @@ Returns an arrayref containing any generated warning messages.
 
 =cut
 
-sub warnings
+sub warnings :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -2206,7 +2213,7 @@ autodetect the mime type, and if that fails, will default to
 
 =cut
 
-sub add_document   ## no critic (Always unpack @_ first)
+sub add_document :method   ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my ($href,$id,$mediatype) = @_;
@@ -2275,7 +2282,7 @@ SEE ALSO: L</add_warning()>, L</clear_errors()>, L</clear_warnerr()>
 
 =cut
 
-sub add_error   ## no critic (Always unpack @_ first)
+sub add_error :method   ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (@newerror) = @_;
@@ -2283,7 +2290,8 @@ sub add_error   ## no critic (Always unpack @_ first)
     croak($subname . "() called as a procedure") unless(ref $self);
     debug(3,"DEBUG[",$subname,"]");
 
-    my $currenterrors = $$self{errors} if($$self{errors});
+    my $currenterrors;
+    $currenterrors = $$self{errors} if($$self{errors});
 
     if(@newerror)
     {
@@ -2329,7 +2337,7 @@ contained it.
 
 =cut
 
-sub add_identifier
+sub add_identifier :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -2420,7 +2428,7 @@ return undef.
 
 =cut
 
-sub add_item   ## no critic (Always unpack @_ first)
+sub add_item :method   ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my ($href,$id,$mediatype) = @_;
@@ -2547,7 +2555,7 @@ This specifies the scheme attribute to set on the element.
 
 =cut
 
-sub add_metadata
+sub add_metadata :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -2681,7 +2689,7 @@ that previously contained it.
 
 =cut
 
-sub add_subject
+sub add_subject :method     ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -2747,7 +2755,7 @@ SEE ALSO: L</add_error()>, L</clear_warnings()>, L</clear_warnerr()>
 
 =cut
 
-sub add_warning   ## no critic (Always unpack @_ first)
+sub add_warning :method   ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (@newwarning) = @_;
@@ -2755,7 +2763,8 @@ sub add_warning   ## no critic (Always unpack @_ first)
     croak($subname . "() called as a procedure") unless(ref $self);
     debug(3,"DEBUG[",$subname,"]");
             
-    my @currentwarnings = @{$$self{warnings}} if($$self{warnings});
+    my @currentwarnings;
+    @currentwarnings = @{$$self{warnings}} if($$self{warnings});
     
     if(@newwarning)
     {
@@ -2776,7 +2785,7 @@ Clear the current list of errors
 
 =cut
 
-sub clear_errors
+sub clear_errors :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -2794,7 +2803,7 @@ Clear both the error and warning lists
 
 =cut
 
-sub clear_warnerr
+sub clear_warnerr :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -2813,7 +2822,7 @@ Clear the current list of warnings
 
 =cut
 
-sub clear_warnings
+sub clear_warnings :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -2835,7 +2844,7 @@ mobi2html may that are not used.
 
 =cut
 
-sub delete_meta_filepos
+sub delete_meta_filepos :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -2861,7 +2870,7 @@ Called from L</fix_misc()>.
 
 =cut
 
-sub fix_dates
+sub fix_dates :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -2925,7 +2934,7 @@ the manifest.
 
 =cut
 
-sub fix_guide
+sub fix_guide :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3012,7 +3021,7 @@ TODO: Also convert language names to IANA language and region codes.
 
 =cut
 
-sub fix_languages
+sub fix_languages :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3047,7 +3056,7 @@ returns undef.  Otherwise, it returns 1.
 
 =cut
 
-sub fix_links
+sub fix_links :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3177,7 +3186,7 @@ continues.
 
 =cut
 
-sub fix_manifest
+sub fix_manifest :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3276,7 +3285,7 @@ L</set_primary_author(%args)>.
 
 =cut
 
-sub fix_metastructure_basic
+sub fix_metastructure_basic :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3309,7 +3318,7 @@ Used in L</fix_oeb12()> and L</fix_mobi()>.
 
 =cut
 
-sub fix_metastructure_oeb12
+sub fix_metastructure_oeb12 :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3377,7 +3386,7 @@ result from only two calls.
 
 =cut
 
-sub fix_misc
+sub fix_misc :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3421,7 +3430,7 @@ become noncompliant with IDPF specifications.
 
 =cut
 
-sub fix_mobi
+sub fix_mobi :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3572,7 +3581,7 @@ forced to be under <metadata>
 
 =cut
 
-sub fix_oeb12
+sub fix_oeb12 :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3676,7 +3685,7 @@ they are.
 
 =cut
 
-sub fix_oeb12_dcmetatags
+sub fix_oeb12_dcmetatags :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3725,7 +3734,7 @@ Specifically, this involves:
 
 =cut
 
-sub fix_opf20
+sub fix_opf20 :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3830,7 +3839,7 @@ them moved from wherever they are.
 
 =cut
 
-sub fix_opf20_dcmetatags
+sub fix_opf20_dcmetatags :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3867,7 +3876,7 @@ might be very broken.
 
 =cut
 
-sub fix_packageid
+sub fix_packageid :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3955,7 +3964,7 @@ Publisher entries with no text are deleted.
 
 =cut
 
-sub fix_publisher
+sub fix_publisher :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -3963,7 +3972,7 @@ sub fix_publisher
     debug(2,"DEBUG[",$subname,"]");
     $self->twigcheck();
 
-    my @publishers = $self->twigroot->descendants(qr/^dc:publisher$/i);
+    my @publishers = $self->twigroot->descendants(qr/^dc:publisher$/ix);
     foreach my $pub (@publishers)
     {
         debug(3,"Examining publisher entry in element '",$pub->gi,"'");
@@ -3998,7 +4007,7 @@ Fixes problems with the OPF spine, specifically:
 
 =cut
 
-sub fix_spine
+sub fix_spine :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -4084,7 +4093,7 @@ it will be created, or the method will croak.
 
 =cut
 
-sub gen_epub    ## no critic (Always unpack @_ first)
+sub gen_epub :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -4185,7 +4194,7 @@ itself.  This will be called automatically by C<gen_epub>.
 
 =cut
 
-sub gen_epub_files
+sub gen_epub_files :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -4230,7 +4239,7 @@ Returns a twig containing the NCX XML, or undef on failure.
 
 =cut
 
-sub gen_ncx    ## no critic (Always unpack @_ first)
+sub gen_ncx :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my ($filename) = @_;
@@ -4420,7 +4429,7 @@ filename.backup.
 
 =cut
 
-sub save
+sub save :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
@@ -4473,7 +4482,7 @@ Mobipocket's software when placed directly under <metadata>
 
 =cut
 
-sub set_adult
+sub set_adult :method
 {
     my $self = shift;
     my $adult = shift;
@@ -4551,7 +4560,7 @@ other location and assigned to the element.
 
 =cut
 
-sub set_date
+sub set_date :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -4663,7 +4672,7 @@ other location and assigned to the element.
 
 =cut
 
-sub set_description
+sub set_description :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -4737,7 +4746,7 @@ other location and assigned to the element.
 
 =cut
 
-sub set_language
+sub set_language :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -4847,7 +4856,7 @@ This specifies the scheme attribute to set on the element.
 
 =cut
 
-sub set_metadata
+sub set_metadata :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -4995,7 +5004,7 @@ filename was specified.
 
 =cut
 
-sub set_opffile
+sub set_opffile :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my ($filename) = @_;
@@ -5043,7 +5052,7 @@ defaults to 'USD' (US Dollars)
 
 =cut
 
-sub set_retailprice
+sub set_retailprice :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my %args = @_;
@@ -5159,7 +5168,7 @@ found.
 
 =cut
 
-sub set_primary_author
+sub set_primary_author :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -5265,7 +5274,7 @@ other location and assigned to the element.
 
 =cut
 
-sub set_publisher
+sub set_publisher :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -5352,7 +5361,7 @@ other location and assigned to the element.
 
 =cut
 
-sub set_review
+sub set_review :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -5418,7 +5427,7 @@ already in use, a warning is logged but the method continues anyway.
 
 =cut
 
-sub set_rights
+sub set_rights :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -5473,7 +5482,7 @@ unknown specification was set.
 
 =cut
 
-sub set_spec
+sub set_spec :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my ($spec) = @_;
@@ -5523,7 +5532,7 @@ already in use, a warning is logged but the method continues anyway.
 
 =cut
 
-sub set_title
+sub set_title :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -5611,7 +5620,7 @@ other location and assigned to the element.
 
 =cut
 
-sub set_type
+sub set_type :method    ## no critic (Always unpack @_ first)
 {
     my $self = shift;
     my (%args) = @_;
@@ -5754,9 +5763,11 @@ sub create_epub_container
 
     # Twig handles utf-8 on its own.  Setting binmode :utf8 here will
     # cause a double-conversion.
-    open($fh_container,'>','META-INF/container.xml') or die;
+    open($fh_container,'>','META-INF/container.xml')
+        or croak($subname,"(): could not write to 'META-INF/container.xml'\n");
     $twig->print(\*$fh_container);
-    close($fh_container);
+    close($fh_container)
+        or croak($subname,"(): could not close 'META-INF/container.xml'\n");
     return $twig;
 }
 
@@ -5810,6 +5821,38 @@ sub debug
     return 1;
 }
 
+
+=head2 hexstring($bindata)
+
+Takes as an argument a scalar containing a sequence of binary bytes.
+Returns a string converting each octet of the data to its two-digit
+hexadecimal equivalent.  There is no leading "0x" on the string.
+
+=cut
+
+sub hexstring
+{
+    my $data = shift;
+    my $subname = ( caller(0) )[3];
+    debug(3,"DEBUG[",$subname,"]");
+
+    croak($subname,"(): no data provided")
+        unless($data);
+
+    my $byte;
+    my $retval = '';
+    my $pos = 0;
+
+    while($pos < length($data))
+    {
+        $byte = unpack("C",substr($data,$pos,1));
+        $retval .= sprintf("%02x",$byte);
+        $pos++;
+    }
+    return $retval;
+}
+
+
 =head2 C<find_links($filename)>
 
 Searches through a file for href and src attributes, and returns a
@@ -5838,12 +5881,15 @@ sub find_links
 {
     my ($filename) = @_;
     return unless(-f $filename);
+    my $subname = ( caller(0) )[3];
+    debug(3,"DEBUG[",$subname,"]");
 
     my $fh;
     my %linkhash;
     my @links;
 
-    open($fh,'<:utf8',$filename);
+    open($fh,'<:utf8',$filename)
+        or croak($subname,"(): unable to open '",$filename,"'\n");
     
     while(<$fh>)
     {
@@ -5858,9 +5904,8 @@ sub find_links
             $linkhash{$link}++;
         }
     }
-    (%linkhash) ? 
-        return keys(%linkhash)
-        : return;
+    if(%linkhash) { return keys(%linkhash); }
+    else { return; }
 }
 
 
@@ -6203,11 +6248,11 @@ sub split_metadata
     }
 
     debug(2,"  splitting '",$metahtmlfile,"'");
-    open($fh_metahtml,"<:utf8",$metahtmlfile)
+    open($fh_metahtml,"<:raw",$metahtmlfile)
 	or croak($subname,"(): Failed to open '",$metahtmlfile,"' for reading!");
-    open($fh_meta,">:utf8",$metafile)
+    open($fh_meta,">:raw",$metafile)
 	or croak($subname,"(): Failed to open '",$metafile,"' for writing!");
-    open($fh_html,">:utf8",$htmlfile)
+    open($fh_html,">:raw",$htmlfile)
 	or croak($subname,"(): Failed to open '",$htmlfile,"' for writing!");
 
 
@@ -6259,8 +6304,8 @@ sub split_metadata
 
     if(-z $htmlfile)
     {
-        carp("split_metadata(): HTML has zero size.",
-             "  Not replacing original.\n");
+        debug(1,"split_metadata(): HTML has zero size.",
+             "  Not replacing original.");
         unlink($htmlfile);
     }
     else
@@ -6312,7 +6357,7 @@ sub split_pre
     my $prefile;
     my $count = 0;
 
-    my $htmlheader = <<END;
+    my $htmlheader = <<'END';
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
     "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html>
@@ -6326,9 +6371,9 @@ END
     $outfilebase = "$filebase-pre" if(!$outfilebase);
     $htmloutfile = "$filebase-nopre.html";
 
-    open($fh_html,"<:utf8",$htmlfile)
+    open($fh_html,"<:raw",$htmlfile)
 	or croak($subname,"(): Failed to open '",$htmlfile,"' for reading!");
-    open($fh_htmlout,">:utf8",$htmloutfile)
+    open($fh_htmlout,">:raw",$htmloutfile)
         or croak($subname,"(): Failed to open '",$htmloutfile,"' for writing!");
 
     local $/;
@@ -6348,7 +6393,7 @@ END
                     or croak("Unable to rename '",$prefile,
                              "' to '",$prefile,".backup'");
             }
-            open($fh_pre,">:utf8",$prefile)
+            open($fh_pre,">:raw",$prefile)
                 or croak("Unable to open '",$prefile,"' for writing!");
             print {*$fh_pre} $utf8xmldec;
             print {*$fh_pre} $htmlheader,"\n";
@@ -6366,6 +6411,80 @@ END
                      $htmlfile,"'!");
     }
     return @prefiles;
+}
+
+
+=head2 C<strip_script(%args)>
+
+Strips any <script>...</script> blocks out of a HTML file.
+
+=head3 Arguments
+
+=over
+
+=item C<infile>
+
+Specifies the input file.  If not specified, the sub croaks.
+
+=item C<outfile>
+
+Specifies the output file.  If not specified, it defaults to C<infile>
+(i.e. the input file is overwritten).
+
+=item C<noscript>
+
+If set to true, the sub will strip <noscript>...</noscript> blocks as
+well.
+
+=back
+
+=cut
+
+sub strip_script
+{
+    my %args = @_;
+    my $subname = ( caller(0) )[3];
+    debug(2,"DEBUG[",$subname,"]");
+
+    croak($subname,"(): no input file specified")
+        if(!$args{infile});
+
+    my %valid_args = (
+        'infile'  => 1,
+        'outfile' => 1,
+        'noscript' => 1,
+        );
+    foreach my $arg (keys %args)
+    {
+        croak($subname,"(): invalid argument '",$arg,"'")
+            if(!$valid_args{$arg});
+    }
+
+    my $infile = $args{infile};
+    my $outfile = $args{outfile};
+    $outfile = $infile unless($outfile);
+
+    my ($fh_in,$fh_out);
+    my $html;
+    local $/;
+
+    open($fh_in,"<:raw",$infile)
+	or croak($subname,"(): Failed to open '",$infile,"' for reading!\n");
+    $html = <$fh_in>;
+    close($fh_in)
+	or croak($subname,"(): Failed to close '",$infile,"'!\n");
+    
+    $html =~ s#<script>.*?</script>\n?##gix;
+    $html =~ s#<noscript>.*?</noscript>\n?##gix
+        if($args{noscript});
+
+    open($fh_out,">:raw",$outfile)
+	or croak($subname,"(): Failed to open '",$outfile,"' for writing!\n");
+    print {*$fh_out} $html;
+    close($fh_out)
+	or croak($subname,"(): Failed to close '",$outfile,"'!\n");
+
+    return 1;
 }
 
 
@@ -6608,8 +6727,9 @@ String::Strip.
 
 =cut
 
-sub trim
+sub trim   ## no critic (Always unpack @_ first)
 {
+    ## no critic (Comma used to separate statements)
     @_ = $_ if not @_ and defined wantarray;
     @_ = @_ if defined wantarray;
     for ( @_ ? @_ : $_ ) { s/^\s+//, s/\s+$// }
@@ -6946,7 +7066,7 @@ sub ymd_validate
 
 ########## END CODE ##########
 
-=head1 BUGS/TODO
+=head1 BUGS AND LIMITATIONS
 
 =over
 
@@ -6993,7 +7113,7 @@ complains, though.
 
 Zed Pobre <zed@debian.org>
 
-=head1 COPYRIGHT
+=head1 LICENSE AND COPYRIGHT
 
 Copyright 2008 Zed Pobre
 

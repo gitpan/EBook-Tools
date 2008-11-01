@@ -1,5 +1,8 @@
 #!/usr/bin/perl
 use warnings; use strict;
+use version; our $VERSION = qv("0.2.0");
+# $Revision: 132 $ $Date: 2008-11-01 15:28:12 -0400 (Sat, 01 Nov 2008) $
+# $Id: ebook.pl 132 2008-11-01 19:28:12Z zed $
 
 
 =head1 NAME
@@ -15,7 +18,7 @@ See also L</EXAMPLES>.
 =cut
 
 
-use EBook::Tools qw(split_metadata split_pre 
+use EBook::Tools qw(split_metadata split_pre strip_script
                     system_tidy_xhtml system_tidy_xml);
 use EBook::Tools::Unpack;
 use File::Basename 'fileparse';
@@ -28,24 +31,26 @@ use Getopt::Long qw(:config bundling);
 #####################################
 
 my %opt = (
-    'author'     => '',
-    'dir'        => '',
-    'fileas'     => '',
-    'filename'   => '',
-    'help'       => 0,
-    'id'         => '',
-    'mimetype'   => '',
-    'mobi'       => 0,
-    'nosave'     => 0,
-    'oeb12'      => 0,
-    'opf20'      => 0,
-    'opffile'    => '',
-    'raw'        => 0,
-    'tidy'       => 0,
-    'tidycmd'    => '',
-    'tidysafety' => 1,
-    'title'      => '',
-    'verbose'    => 0,
+    'author'      => '',
+    'dir'         => '',
+    'fileas'      => '',
+    'filename'    => '',
+    'help'        => 0,
+    'htmlconvert' => 0,
+    'id'          => '',
+    'mimetype'    => '',
+    'mobi'        => 0,
+    'nosave'      => 0,
+    'noscript'    => 0,
+    'oeb12'       => 0,
+    'opf20'       => 0,
+    'opffile'     => '',
+    'raw'         => 0,
+    'tidy'        => 0,
+    'tidycmd'     => '',
+    'tidysafety'  => 1,
+    'title'       => '',
+    'verbose'     => 0,
     );
 
 GetOptions(
@@ -55,10 +60,12 @@ GetOptions(
     'fileas=s',
     'filename|file|f=s',
     'help|h|?',
+    'htmlconvert',
     'id=s',
     'mimetype|mtype=s',
     'mobi|m',
     'nosave',
+    'noscript',
     'raw',
     'oeb12',
     'opf20',
@@ -84,17 +91,18 @@ $EBook::Tools::tidycmd = $opt{tidycmd} if($opt{tidycmd});
 $EBook::Tools::tidysafety = $opt{tidysafety};
 
 my %dispatch = (
-    'adddoc'    => \&adddoc,
-    'additem'   => \&additem,
-    'blank'     => \&blank,
-    'fix'       => \&fix,
-    'genepub'   => \&genepub,
-    'setmeta'   => \&setmeta,
-    'splitmeta' => \&splitmeta,
-    'splitpre'  => \&splitpre,
-    'tidyxhtml' => \&tidyxhtml,
-    'tidyxml'   => \&tidyxml,
-    'unpack'    => \&unpack,
+    'adddoc'      => \&adddoc,
+    'additem'     => \&additem,
+    'blank'       => \&blank,
+    'fix'         => \&fix,
+    'genepub'     => \&genepub,
+    'setmeta'     => \&setmeta,
+    'splitmeta'   => \&splitmeta,
+    'splitpre'    => \&splitpre,
+    'stripscript' => \&stripscript,
+    'tidyxhtml'   => \&tidyxhtml,
+    'tidyxml'     => \&tidyxml,
+    'unpack'      => \&unpack,
     );
 
 my $cmd = shift;
@@ -604,6 +612,10 @@ sub splitmeta
 Split <pre>...</pre> blocks out of an existing HTML file, wrapping
 each one found into a separate HTML file.
 
+The first non-option argument is taken to be the input file.  The
+second non-option argument is taken to be the basename of the output
+files.
+
 =cut
 
 sub splitpre
@@ -614,6 +626,44 @@ sub splitpre
     exit(0);
 }
 
+
+=head2 C<stripscript>
+
+Strips <script>...</script> blocks out of a HTML file.
+
+The first non-option argument is taken to be the input file.  The
+second non-option argument is taken to be the output file.  If the
+latter is not specified, the input file will be overwritten.
+
+=head3 Options
+
+=over
+
+=item * C<--noscript>
+
+Strips <noscript>...</noscript> blocks as well.
+
+=back
+
+=cut
+
+sub stripscript
+{
+    my ($infile,$outfile) = @_;
+
+    if(!$infile)
+    {
+        print "You must specify an input file.\n";
+        exit(10);
+    }
+    my %args;
+    $args{infile} = $infile;
+    $args{outfile} = $outfile;
+    $args{noscript} = $opt{noscript};
+
+    strip_script(%args);
+    exit(0);
+}
 
 =head2 C<tidyxhtml>
 
@@ -692,6 +742,11 @@ it will override the option if it exists.
 The unpacking routines should autodetect the type of book under normal
 conditions.  If autodetection fails, a format can be forced here.  See
 L<EBook::Tools::Unpack> for a list of available formats.
+
+=item C<--htmlconvert>
+
+Attempt to convert the extracted text to HTML.  This is obviously only
+of value if the format doesn't use HTML normally.
 
 =item C<--raw>
 
@@ -799,6 +854,7 @@ sub unpack
         'file' => $filename,
         'dir' => $dir,
         'format' => $opt{format},
+        'htmlconvert' => $opt{htmlconvert},
         'raw' => $opt{raw},
         'author' => $opt{author},
         'title' => $opt{title},
@@ -853,6 +909,10 @@ sub useoptdir ()
 =head1 BUGS/TODO
 
 =over
+
+=item * Need to implement a one-pass conversion from one format to
+another.  This will wait until more formats are supported by the
+underlying modules, however.
 
 =item * documentation is incomplete
 
