@@ -1,9 +1,9 @@
 package EBook::Tools::EReader;
 use warnings; use strict; use utf8;
 use 5.010; # Needed for smart-match operator
-use version; our $VERSION = qv("0.2.0");
-# $Revision: 132 $ $Date: 2008-11-01 15:28:12 -0400 (Sat, 01 Nov 2008) $
-# $Id: EReader.pm 132 2008-11-01 19:28:12Z zed $
+use version; our $VERSION = qv("0.3.0");
+# $Revision: 181 $ $Date: 2008-11-15 12:34:52 -0500 (Sat, 15 Nov 2008) $
+# $Id: EReader.pm 181 2008-11-15 17:34:52Z zed $
 
 # Double-sigils are needed for lexical variables in clear print statements
 ## no critic (Double-sigil dereference)
@@ -13,8 +13,7 @@ use version; our $VERSION = qv("0.2.0");
 
 =head1 NAME
 
-EBook::Tools::EReader - Components related to the
-Fictionwise/PeanutPress eReader format.
+EBook::Tools::EReader - Components related to the Fictionwise/PeanutPress eReader format.
 
 =head1 SYNOPSIS
 
@@ -49,6 +48,7 @@ our @EXPORT_OK;
     &cp1252_to_pml
     &pml_to_html
     );
+our %EXPORT_TAGS = ('all' => [@EXPORT_OK]);
 
 sub import   ## no critic (Always unpack @_ first)
 {
@@ -195,7 +195,7 @@ sub footnotes_pml
     debug(2,"DEBUG[",$subname,"]");
 
     my %footnotehash = $self->footnotes;
-    my $text;
+    my $text = '';
 
     foreach my $footnoteid (sort keys %footnotehash)
     {
@@ -343,7 +343,7 @@ sub sidebars_pml
     debug(2,"DEBUG[",$subname,"]");
 
     my %sidebarhash = $self->sidebars;
-    my $text;
+    my $text = '';
 
     foreach my $sidebarid (sort keys %sidebarhash)
     {
@@ -355,9 +355,9 @@ sub sidebars_pml
 }
 
 
-=head2 C<footnotes_html()>
+=head2 C<sidebars_html()>
 
-Returns a string containing all of the footnotes in a form suitable to
+Returns a string containing all of the sidebars in a form suitable to
 append to the end of HTML text output.  This is called as part of
 L</html()>.
 
@@ -395,7 +395,8 @@ and footnotes) with the given filename.
 If C<$filename> is not specified, writes to C<$self->filebase> with
 a ".html" extension.
 
-Returns 1 on success, or undef if there was no text to write.
+Returns the filename used on success, or undef if there was no text to
+write.
 
 =cut
 
@@ -420,7 +421,7 @@ sub write_html :method
     croak($subname,"(): failed to generate any text")
         if(-z $filename);
     
-    return 1;
+    return $filename;
 }
 
 
@@ -428,7 +429,8 @@ sub write_html :method
 
 Writes each image record to the disk.
 
-Returns the number of images written.
+Returns a list containing the filenames of all images written, or
+undef if none were found.
 
 =cut
 
@@ -438,6 +440,7 @@ sub write_images :method
     my $subname = ( caller(0) )[3];
     debug(3,"DEBUG[",$subname,"]");
 
+    return unless($self->{imagedata});
     my %imagedata = %{$self->{imagedata}};
     my $imagedir = $self->filebase . "_img";
 
@@ -453,7 +456,7 @@ sub write_images :method
         close($fh)
             or croak("Unable to close image file '$imagedir/$image'\n");
     }
-    return scalar(keys %imagedata);
+    return keys %imagedata;
 }
 
 
@@ -465,7 +468,8 @@ and footnotes) with the given filename.
 If C<$filename> is not specified, writes to C<$self->filebase> with
 a ".pml" extension.
 
-Returns 1 on success, or undef if there was no text to write.
+Returns the filename used on success, or undef if there was no text to
+write.
 
 =cut
 
@@ -490,7 +494,7 @@ sub write_pml :method
     croak($subname,"(): failed to generate any text")
         if(-z $filename);
     
-    return 1;
+    return $filename;
 }
 
 
@@ -619,7 +623,6 @@ sub ParseRecord :method   ## no critic (Always unpack @_ first)
     elsif($currentrecord >= $self->{header}->{nontextoffset}
           && $currentrecord < $self->{header}->{bookmarkoffset})
     {
-        debug(1,"###DEBUG: unknown");
         $recordtext = uncompress($record{data});
         $recordtext = uncompress_palmdoc($record{data}) unless($recordtext);
         if($recordtext)
@@ -805,7 +808,7 @@ sub ParseRecord :method   ## no critic (Always unpack @_ first)
 =head2 C<ParseRecord0($data)>
 
 Parses the header record and places the parsed values into the hashref
-C<$self->{header}>.
+C<< $self->{header} >>.
 
 Returns the hash (not the hashref).
 

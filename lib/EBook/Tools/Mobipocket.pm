@@ -1,9 +1,11 @@
-package EBook::Tools::Mobipocket;
+ï»¿package EBook::Tools::Mobipocket;
 use warnings; use strict; use utf8;
+#use warnings::unused;
 use 5.010; # Needed for smart-match operator
-use version; our $VERSION = qv("0.2.0");
-# $Revision: 132 $ $Date: 2008-11-01 15:28:12 -0400 (Sat, 01 Nov 2008) $
-# $Id: Mobipocket.pm 132 2008-11-01 19:28:12Z zed $
+use English qw( -no_match_vars );
+use version; our $VERSION = qv("0.3.0");
+# $Revision: 181 $ $Date: 2008-11-15 12:34:52 -0500 (Sat, 15 Nov 2008) $
+# $Id: Mobipocket.pm 181 2008-11-15 17:34:52Z zed $
 
 # Perl Critic overrides:
 ## no critic (Package variable)
@@ -18,30 +20,49 @@ use base qw(Exporter Palm::Raw);
 
 our @EXPORT_OK;
 @EXPORT_OK = qw (
+    &find_mobidedrm
+    &find_mobigen
     &parse_mobi_exth
     &parse_mobi_header
     &parse_mobi_language
+    &pid_append_checksum
+    &pid_is_valid
+    &pukall_cipher_1
+    &system_mobidedrm
+    &system_mobigen
     &unpack_mobi_language
     );
+our %EXPORT_TAGS = ('all' => [@EXPORT_OK]);
 
 sub import   ## no critic (Always unpack @_ first)
 {
     &Palm::PDB::RegisterPDBHandlers( __PACKAGE__, [ "MOBI", "BOOK" ], );
     &Palm::PDB::RegisterPRCHandlers( __PACKAGE__, [ "MOBI", "BOOK" ], );
-    EBook::Tools::EReader->export_to_level(1, @_);
+    EBook::Tools::Mobipocket->export_to_level(1, @_);
     return;
 }
 
 =head1 NAME
 
-EBook::Tools::Mobipocket - Components related to the
-Mobipocket format.
+EBook::Tools::Mobipocket - Components related to the Mobipocket format.
 
 =head1 SYNOPSIS
+
+ use EBook::Tools::Mobipocket qw(:all);
+ my $mobi = EBook::Tools::Mobipocket->new();
+ $mobi->Load('filename.prc');
+ print "Title: ",$mobi->{title},"\n";
+ print "Author: ",$mobi->{header}{exth}{author},"\n";
+ print "Language: ",$mobi->{header}{mobi}{language},"\n";
+ 
+ my $mobigen = find_mobigen();
+ system_mobigen('myfile.opf'); 
 
 =head1 DEPENDENCIES
 
 =over
+
+=item * C<Bit::Vector>
 
 =item * C<Compress::Zlib>
 
@@ -53,14 +74,17 @@ Mobipocket format.
 
 =item * C<P5-Palm>
 
+=item * C<String::CRC32>
+
 =back
 
 =cut
 
 
+use Bit::Vector;
 use Carp;
 use Compress::Zlib;
-use EBook::Tools qw(debug hexstring split_metadata system_tidy_xhtml);
+use EBook::Tools qw(:all);
 use EBook::Tools::PalmDoc qw(parse_palmdoc_header uncompress_palmdoc);
 use Encode;
 use Fcntl qw(SEEK_CUR SEEK_SET);
@@ -72,6 +96,7 @@ use List::Util qw(min);
 use List::MoreUtils qw(uniq);
 use Palm::PDB;
 use Palm::Raw();
+use String::CRC32;
 
 
 our %exthtypes = (
@@ -240,7 +265,7 @@ $mobilangcode{58}{0}  = 'mt'; # Maltese
 $mobilangcode{78}{0}  = 'mr'; # Marathi
 $mobilangcode{97}{0}  = 'ne'; # Nepali
 $mobilangcode{20}{0}  = 'no'; # Norwegian
-#$mobilangcode{??}{??} = 'nb'; # Norwegian Bokmål (Mobipocket not supported)
+#$mobilangcode{??}{??} = 'nb'; # Norwegian Bokml (Mobipocket not supported)
 #$mobilangcode{??}{??} = 'nn'; # Norwegian Nynorsk (Mobipocket not supported)
 $mobilangcode{72}{0}  = 'or'; # Oriya
 $mobilangcode{21}{0}  = 'pl'; # Polish
@@ -310,6 +335,9 @@ $mobilangcode{42}{0}  = 'vi'; # Vietnamese
 $mobilangcode{52}{0}  = 'xh'; # Xhosa
 $mobilangcode{53}{0}  = 'zu'; # Zulu
 
+our $mobigen_cmd = '';
+our $mobidedrm_cmd = '';
+
 our %pdbencoding = (
     '1252' => 'Windows-1252',
     '65001' => 'UTF-8',
@@ -363,7 +391,29 @@ sub new   ## no critic (Always unpack @_ first)
 }
 
 
+######################################
+########## ACCESSOR METHODS ##########
+######################################
+
 =head1 ACCESSOR METHODS
+
+=head2 C<drm()>
+
+Returns 1 if the C<drmoffset> header value is neither C<0> nor
+C<0xffffffff>.  Returns undef if C<drmoffset> is undefined. Returns 0
+otherwise.
+
+=cut
+
+sub drm :method
+{
+    my $self = shift;
+    my $drmoffset = $self->{header}{mobi}{drmoffset};
+    return unless(defined $drmoffset);
+    return 1 if( $drmoffset && ($drmoffset != hex("0xffffffff")) );
+    return 0;
+}
+
 
 =head2 C<text()>
 
@@ -388,6 +438,113 @@ sub text :method
 }
 
 
+=head2 C<write_images()>
+
+Writes each image record to the disk.
+
+Returns the number of images written.
+
+=cut
+
+sub write_images :method
+{
+    my $self = shift;
+    my $subname = ( caller(0) )[3];
+    debug(3,"DEBUG[",$subname,"]");
+
+    my %imagedata = %{$self->{imagedata}};
+
+    foreach my $image (sort keys %imagedata)
+    {
+        debug(1,"Writing image '",$image,"' [",
+              length(${$imagedata{$image}})," bytes]");
+        open(my $fh,">:raw",$image)
+            or croak("Unable to open '",$image,"' to write image\n");
+        print {*$fh} ${$imagedata{$image}};
+        close($fh)
+            or croak("Unable to close image file '",$image,"'\n");
+    }
+    return scalar(keys %imagedata);
+}
+
+
+=head2 C<write_text($filename)>
+
+Writes the book text to disk with the given filename.  This filename
+must match the filename given to L</fix_html()> for the internal links
+to be consistent.
+
+Croaks if C<$filename> is not specified.
+
+Returns 1 on success, or undef if there was no text to write.
+
+=cut
+
+sub write_text :method
+{
+    my $self = shift;
+    my $filename = shift;
+    my $subname = ( caller(0) )[3];
+    debug(3,"DEBUG[",$subname,"]");
+
+    croak($subname,"(): no filename specified.\n")
+        unless($filename);
+    return unless($$self{text});
+
+    debug(1,"DEBUG: writing text to '",$filename,
+          "', encoding ",$pdbencoding{$$self{encoding}});
+
+    open(my $fh,">",$filename)
+        or croak($subname,"(): unable to open '",$filename,"' for writing!\n");
+    if($$self{encoding} == 65001) { binmode($fh,":utf8"); }
+    else { binmode($fh); }
+    print {*$fh} $$self{text};
+    close($fh)
+        or croak($subname,"(): unable to close '",$filename,"'!\n");
+    
+    croak($subname,"(): failed to generate any text")
+        if(-z $filename);
+    
+    return 1;
+}
+
+
+=head2 C<write_unknown_records()>
+
+Writes each unidentified record to disk with a filename in the format of
+'raw-record-####', where #### is the record number (not the record ID).
+
+Returns the number of records written.
+
+=cut
+
+sub write_unknown_records :method
+{
+    my $self = shift;
+    my $subname = ( caller(0) )[3];
+    debug(3,"DEBUG[",$subname,"]");
+
+    my %unknowndata = %{$self->{unknowndata}};
+
+    foreach my $rec (sort { $a <=> $b } keys %unknowndata)
+    {
+        my $recstring = sprintf("%04d",$rec);
+        debug(1,"Dumping raw record ",$recstring);
+        my $rawname = "raw-record-" . $recstring;
+        open(my $fh,">:raw",$rawname)
+            or croak("Unable to open '",$rawname,"' to write raw record\n");
+        print {*$fh} $$self{unknowndata}{$rec};
+        close($fh)
+            or croak("Unable to close raw record file '",$rawname,"'\n");
+    }
+    return scalar(keys %unknowndata);
+}
+
+
+######################################
+########## MODIFIER METHODS ##########
+######################################
+
 =head1 MODIFIER METHODS
 
 These methods have two naming/capitalization schemes -- methods
@@ -395,6 +552,36 @@ directly related to the subclassing of Palm::PDB use its MethodName
 capitalization style.  Any other methods are
 lowercase_with_underscores for consistency with the rest of
 EBook::Tools.
+
+
+=head2 C<Load($filename)>
+
+Sets C<$self->{filename}> and then loads and parses the file specified
+by C<$filename>, calling L</ParseRecord(%record)> on every record
+found.
+
+If DictionaryHuffman compression is detected, text records will be
+left untouched during the ParseRecord pass, and
+L</uncompress_dictionaryhuffman_records()> will be called after the
+initial parsing pass is complete.
+
+=cut
+
+sub Load :method
+{
+    my $self = shift;
+    my $filename = shift;
+    my $retval;
+
+    $self->{filename} = $filename;
+    $retval = $self->SUPER::Load($filename);
+    if($self->{header}{palm}{compression} == 17480)
+    {
+        $self->uncompress_dictionaryhuffman_records();
+    }
+    return $retval;
+}
+
 
 =head2 C<ParseRecord(%record)>
 
@@ -423,55 +610,147 @@ sub ParseRecord :method   ## no critic (Always unpack @_ first)
     }
 
     my $data = $record{data};
+    my $compression = $$self{header}{palm}{compression};
     my $recordtext;
+
+    # If a DATP record exists, it may have the same record number
+    # as 'lastimagerecord'?
+    my @afterimage;
+    push(@afterimage,$self->{header}{mobi}{lastimagerecord}+1)
+        if($self->{header}{mobi}{lastimagerecord});
+    push(@afterimage,$self->{header}{mobi}{datprecord})
+        if($self->{header}{mobi}{datprecord});
+
+    # Several things can come after INDX records, but some of them can
+    # have record offsets of 0
+    my @afterindx;
+    push(@afterindx,$self->{header}{mobi}{huffrecord})
+        if($self->{header}{mobi}{huffrecord});
+    push(@afterindx,$self->{header}{mobi}{firstimagerecord})
+        if($self->{header}{mobi}{firstimagerecord});
+    push(@afterindx,$self->{header}{mobi}{datprecord})
+        if($self->{header}{mobi}{datprecord});
 
     if($currentrecord == 0)
     {
         $self->ParseRecord0($data);
     }
-    elsif($currentrecord < $$self{header}{mobi}{nontextrecord})
+    elsif($currentrecord < $$self{header}{mobi}{indxrecord}
+          && $currentrecord < $$self{header}{mobi}{firstimagerecord})
     {
-        # Text records come immediately after the header record
-        # Raw record data is deleted to save memory
-        $self->ParseRecordText(\$data);
+        # Text records come immediately after the header record, but
+        # the distinction between indxrecord and firstimagerecord is
+        # not clear.  Sometimes images show up at one, and sometimes
+        # the other.
+
+        if($self->drm)
+        {
+            debug(2,"DEBUG: record ",$currentrecord,
+                  " is DRM-protected text, skipping");
+        }
+        elsif($compression == 17480)
+        {
+            # HUFF/CDIC-compressed text is skipped on the first pass,
+            # since uncompressing it requires data from records that
+            # aren't parsed until later.
+            debug(2,"DEBUG: record ",$currentrecord,
+                  " is HUFF/CDIC-compressed, handled in second pass");
+        }
+        else
+        {
+            debug(2,"DEBUG: record ",$currentrecord,
+                  " is PalmDoc-compressed text");
+            $self->ParseRecordText(\$data);
+        }
+    }
+    elsif($currentrecord >= $$self{header}{mobi}{indxrecord}
+          && $currentrecord < min(@afterindx))
+    {
+        # INDX records are not understood.
+        debug(1,"DEBUG: record ",$currentrecord," is INDX record [",
+              length($data)," bytes starting with '",
+              substr($record{data},0,4),"']");
+        $$self{unknowndata}{$currentrecord} = $data;
+    }
+    elsif($currentrecord >= $$self{header}{mobi}{huffrecord}
+          && $currentrecord < 
+          ($$self{header}{mobi}{huffrecord} 
+           + $$self{header}{mobi}{huffreccnt}) )
+    {
+        my $recordtype = substr($data,0,4);
+        if($recordtype eq 'HUFF')
+        {
+            $self->ParseRecordHUFF(\$data);
+        }
+        elsif($recordtype eq 'CDIC')
+        {
+            $self->ParseRecordCDIC(\$data);
+        }
+        else
+        {
+            debug(1,"WARNING: record ",$currentrecord,
+                  " expected HUFF/CDIC record, but found ",
+                  length($data)," bytes starting with '",
+                  $recordtype,"'");
+        }
     }
     elsif($currentrecord >= $$self{header}{mobi}{firstimagerecord}
-          && $currentrecord <= $$self{header}{mobi}{lastimagerecord})
+          && $currentrecord < min(@afterimage) )
     { 
-        # Image records come immediately after the text if they exist
-        # Raw record data is deleted to save memory
-        my ($imagex,$imagey,$imagetype) = imgsize(\$data);
-        $self->ParseRecordImage(\$data) if(defined($imagex) && $imagetype);
+        my ($imagex,undef,$imagetype) = imgsize(\$data);
+        if(defined($imagex) && $imagetype)
+        {
+            $self->ParseRecordImage(\$data);
+        }
+        else
+        {
+            debug(1,"DEBUG: record ",$currentrecord,
+                  " is not imagedata, but ",length($data),
+                  " bytes starting with '", substr($data,0,4),"'");
+            $$self{unknowndata}{$currentrecord} = $data;
+        }
+    }
+    elsif($currentrecord >= $$self{header}{mobi}{datprecord}
+          && $currentrecord < 
+          $$self{header}{mobi}{datprecord} + $$self{header}{mobi}{datpreccnt})
+    {
+        # DATP records not understood
+        my $recordid = substr($data,0,4);
+        if($recordid eq 'DATP')
+        {
+            debug(2,"DEBUG: record ",$currentrecord," is DATP record");
+        }
+        else
+        {
+            debug(1,"DEBUG: record ",$currentrecord," isn't DATP record?");
+        }
+        $$self{unknowndata}{$currentrecord} = $data;
     }
     elsif($currentrecord == $$self{header}{mobi}{flisrecord})
     {
-        $recordtext = uncompress_palmdoc($data);
-        if($recordtext)
+        my $recordid = substr($data,0,4);
+        if($recordid eq 'FLIS')
         {
             debug(2,"DEBUG: record ",$currentrecord," is FLIS record");
-            debug(2,"       '",$recordtext,"'");
-            $$self{unknowndata}{$currentrecord} = $recordtext;
         }
         else
         {
             debug(1,"DEBUG: record ",$currentrecord," isn't FLIS record?");
-            $$self{unknowndata}{$currentrecord} = $data;
         }
+        $$self{unknowndata}{$currentrecord} = $data;
     }
     elsif($currentrecord == $$self{header}{mobi}{fcisrecord})
     {
-        $recordtext = uncompress_palmdoc($data);
-        if($recordtext)
+        my $recordid = substr($data,0,4);
+        if($recordid eq 'FCIS')
         {
             debug(2,"DEBUG: record ",$currentrecord," is FCIS record");
-            debug(2,"       '",$recordtext,"'");
-            $$self{unknowndata}{$currentrecord} = $recordtext;
         }
         else
         {
             debug(1,"DEBUG: record ",$currentrecord," isn't FCIS record?");
-            $$self{unknowndata}{$currentrecord} = $data;
         }
+        $$self{unknowndata}{$currentrecord} = $data;
     }
     else
     {
@@ -486,7 +765,8 @@ sub ParseRecord :method   ## no critic (Always unpack @_ first)
         else
         {
             debug(1,"DEBUG: record ",$currentrecord," is unknown (",
-                  length($data)," bytes)");
+                  length($data)," bytes starting with '",
+                  substr($record{data},0,4),"')");
             $$self{unknowndata}{$currentrecord} = $data;
         }
     }
@@ -541,7 +821,8 @@ sub ParseRecord0 :method
     
     if($headermobi{exthflags} & 0x040) # If bit 6 is set, EXTH exists
     {
-        debug(2,"DEBUG: Unpacking EXTH data");
+        debug(2,"DEBUG: Unpacking EXTH data at record 0 offset ",
+              $headersize+16);
         $headerdata = substr($data,$headersize+16);
         $$self{header}{exth} = parse_mobi_exth($headerdata);
     }
@@ -555,15 +836,317 @@ sub ParseRecord0 :method
         debug(1,"DEBUG: Extracted title '",$$self{title},"'");
     }
 
-
-    croak($subname,"(): DRM code ",
-          sprintf("0x%08x",$headermobi{drmcode}),
-          " found, but DRM is not supported.\n")
-        if($headermobi{drmcode}
-           && ($headermobi{drmcode} != hex("0xffffffff")) );
-
     return 1;
 }    
+
+
+=head2 C<ParseRecordCDIC(\$data)>
+
+Parses a CDIC record.  Takes as a sole argument a reference to the
+data of the record.
+
+=head3 Record format
+
+=over
+
+=item * Offset 0: Record identifier
+
+4 bytes, always 'CDIC'
+
+=item * Offset 4: Header length
+
+4 bytes, big-endian long int, always = 16
+
+=item * Offset 8: Index count
+
+4 bytes, big-endian long int, marks the number of big-endian short
+ints immediately following the header used as index points into the
+dictionary data
+
+=item * Offset 12: Codelength
+
+4 bytes, big-endian long int, number of code bits
+
+=item * Offset 16: Indexes
+
+A number of big-endiant short ints used as index points into the
+dictionary data
+
+=item * Offset ??: Dictionary data
+
+Dictionary result strings immediately following the indexes
+
+=back
+
+=cut
+
+sub ParseRecordCDIC
+{
+    my $self = shift;
+    my $dataref = shift;
+    my $subname = ( caller(0) )[3];
+    debug(3,"DEBUG[",$subname,"]");
+
+    my $currentrecord = scalar @{$self->{records}};
+    my %cdic;
+    my @cdics;
+    my $size = length($$dataref);
+    my @list = unpack('a4NNN',substr($$dataref,0,16));
+    my $recordid     = $list[0];
+    my $headerlength = $list[1];
+    my $indexcount   = $list[2];
+    my $codelength   = $list[3];
+
+    if($recordid ne 'CDIC')
+    {
+        debug(1,"DEBUG: record ",$currentrecord,
+              " does not have CDIC header (found '",$recordid,"')");
+        $$self{unknowndata}{$currentrecord} = $$dataref;
+        $self->{huff} = {};
+    }
+    elsif($headerlength != 16)
+    {
+        debug(1,"DEBUG: record ",$currentrecord,
+              " is CDIC record with unexpected header length (",
+              $headerlength,", expected 16");
+        $$self{unknowndata}{$currentrecord} = $$dataref;
+        $self->{huff} = {};
+    }
+    elsif(!$codelength)
+    {
+        debug(1,"DEBUG: record ",$currentrecord,
+              " is CDIC record with zero codelength!");
+        $$self{unknowndata}{$currentrecord} = $$dataref;
+        $self->{huff} = {};
+    }
+    elsif($headerlength + (1 << $codelength) >= $size)
+    {
+        debug(1,"DEBUG: record ",$currentrecord,
+              " is CDIC record too short for its codelength (",
+              $size," bytes, codelength=",$codelength,")");
+        $$self{unknowndata}{$currentrecord} = $$dataref;
+        $self->{huff} = {};
+    }
+    elsif($self->{huff}->{codelength}
+          && $self->{huff}->{codelength} != $codelength)
+    {
+        debug(1,"DEBUG: record ",$currentrecord,
+              " is CDIC record with a new codelength (",
+              $codelength," bits, previous was ",
+              $self->{huff}->{codelength});
+        $$self{unknowndata}{$currentrecord} = $$dataref;
+        $self->{huff} = {};
+    }
+    else
+    {
+        my @indexes = unpack("n$indexcount",substr($$dataref,16,$indexcount*2));
+        $cdic{id} = $recordid;
+        $cdic{indexes} = \@indexes;
+        $cdic{data} = $$dataref;
+        $cdic{codelength} = $codelength;
+        $self->{huff}->{codelength} = $codelength;
+
+        @cdics = @{$self->{cdics}} if($self->{cdics});
+
+        push(@cdics,\%cdic);
+        $self->{cdics} = \@cdics;
+        debug(1,"DEBUG: record ",$currentrecord," is CDIC record ",
+              $#cdics, " [",length($$dataref)," bytes,",
+              " indexcount=",$indexcount,
+              " codelength=",$codelength,"]");
+    }
+    return 1;
+}
+
+
+=head2 C<ParseRecordHUFF(\$data)>
+
+Parses a HUFF record.  Takes as a sole argument a reference to the
+data of the record.
+
+=head3 Record format
+
+=over
+
+=item * Offset 0: Record identifier
+
+4 bytes, always 'HUFF'
+
+=item * Offset 4: Header length
+
+4 bytes, big-endian long int, always = 24
+
+=item * Offset 8: Cache table (big-endian) offset
+
+4 bytes, big-endian long int, always = 24
+
+=item * Offset 12: Base table (big-endian) offset
+
+4 bytes, big-endian long int, always = 1048
+
+=item * Offset 16: Cache table (little-endian) offset
+
+4 bytes, big-endian long int, always = 1304
+
+=item * Offset 20: Base table (little-endian) offset
+
+4 bytes, big-endian long int, always = 2328
+
+=item * Offset 24: Cache table (big-endian)
+
+1024 bytes, 256 big-endian long ints
+
+This is a look up table for the length and decoding of short
+codewords.  If the codeword represented by the 8 bits is unique, then
+bit 7 (0x80) will be set, and the low 5 bits are the length in bits of
+the code.  The high three bytes partially represent the final symbol.
+
+If bit 7 is clear, then the code is looked up in the base table
+
+=item * Offset 1048: Base table (big-endian)
+
+256 bytes, 64 big-endian long ints
+
+This is where the codeword is looked up if it isn't found in the cache
+table.
+
+=item * Offset 1304: Cache table (little-endian)
+
+1024 bytes, 256 little-endian long ints.
+
+This contains exactly the same data as in the cache table at offset
+24, except that all of the values are stored in little-endian format
+instead of big-endian.
+
+Presumably this is for a speed advantage on slow little-endian
+processors.  This module uses only the big-endian tables.
+
+=item * Offset 2328: Base table (little-endian)
+
+256 bytes, 64 little-endian long ints
+
+This contains exactly the same data as in the base table at offset
+1048, except that all of the values are stored in little-endian format
+instead of big-endian.
+
+Presumably this is for a speed advantage on slow little-endian
+processors.  This module uses only the big-endian tables.
+
+=back
+
+=cut
+
+
+sub ParseRecordHUFF
+{
+    my $self = shift;
+    my $dataref = shift;
+    my $subname = ( caller(0) )[3];
+    debug(3,"DEBUG[",$subname,"]");
+
+    my $currentrecord = scalar @{$self->{records}};
+    my $size = length($$dataref);
+    my %huff;
+    my (@cache,@lecache);
+    my (@basetable,@lebasetable);
+    my $headerlength;
+    my $codelength;
+
+    my @list = unpack('a4NNNNN',substr($$dataref,0,24));
+    $huff{id}            = $list[0];
+    $huff{headerlength}  = $list[1];
+    $huff{cacheoffset}   = $list[2];
+    $huff{baseoffset}    = $list[3];
+    $huff{lecacheoffset} = $list[4];
+    $huff{lebaseoffset}  = $list[5];
+    
+    $huff{data}  = $$dataref;
+    $huff{bitpos} = 0;
+
+    if($huff{id} ne 'HUFF')
+    {
+        debug(1,"DEBUG: record ",$currentrecord,
+              " does not have HUFF header (found '",$huff{id},"')");
+        $$self{unknowndata}{$currentrecord} = $$dataref;
+        return;
+    }
+    if($size < 2584)
+    {
+        debug(1,"WARNING: record ",$currentrecord,
+              " is HUFF record with unexpected size (",
+              $size," bytes, expected at least 2584");
+        $$self{unknowndata}{$currentrecord} = $$dataref;
+        return;
+    }
+    if($size < $huff{lebaseoffset} + 256)
+    {
+        debug(1,"WARNING: recoord ",$currentrecord,
+              "is HUFF record too short to read all data (",
+              $size," bytes, lebaseoffset=",$huff{lebaseoffset});
+        $$self{unknowndata}{$currentrecord} = $$dataref;
+        return;
+    }
+
+    @cache = unpack('N[256]',
+                    substr($$dataref,$huff{cacheoffset},256*4));
+    $huff{cache} = \@cache;
+
+    @basetable = unpack('N[64]',
+                        substr($$dataref,$huff{baseoffset},64*4));
+    $huff{basetable} = \@basetable;
+
+    # Little-endian versions aren't used, but are checked against
+    # big-endian for corruption
+    @lecache = unpack('V[256]',
+                      substr($$dataref,$huff{lecacheoffset},256*4));
+    @lebasetable = unpack('V[64]',
+                          substr($$dataref,$huff{lebaseoffset},64*4));
+
+    unless(@cache ~~ @lecache)
+    {
+        debug(1,"WARNING: big-endian and little-endian HUFF cache",
+              " tables are different in record ",$currentrecord,"!");
+    }
+    unless(@basetable ~~ @lebasetable)
+    {
+        debug(1,"WARNING: big-endian and little-endian HUFF base",
+              " tables are different in record ",$currentrecord,"!");
+    }
+
+
+    if($huff{headerlength} != 24)
+    {
+        debug(1,"DEBUG: record ",$currentrecord,
+              " is HUFF record with unexpected header length (",
+              $huff{headerlength},", expected 24");
+        $$self{unknowndata}{$currentrecord} = $$dataref;
+    }
+    elsif($huff{cacheoffset} != 24)
+    {
+        deubg(1,"DEBUG: record ",$currentrecord,
+              " is HUFF record with unexpected cache offset (",
+              $huff{cacheoffset}," expected 24");
+        $$self{unknowndata}{$currentrecord} = $$dataref;
+    }
+    elsif($huff{baseoffset} != 1048)
+    {
+        debug(1,"DEBUG: record ",$currentrecord,
+              " is HUFF record with unexpected base table offset (",
+              $huff{baseoffset}," expected 1048)");
+        $$self{unknowndata}{$currentrecord} = $$dataref;
+    }
+    else
+    {
+        $self->{huff} = \%huff;
+        debug(2,"DEBUG: record ",$currentrecord," is HUFF record [",
+              length($$dataref)," bytes,",
+              " cacheoffset=",$huff{cacheoffset},
+              " baseoffset=",$huff{baseoffset},
+              " lecacheoffset=",$huff{lecacheoffset},
+              " lebaseoffset=",$huff{lebaseoffset},"]");
+    }
+    return 1;
+}
 
 
 =head2 C<ParseRecordImage(\$dataref)>
@@ -629,13 +1212,21 @@ sub ParseRecordText :method
     my $compression = $$self{header}{palm}{compression};
     my $recordtext;
 
-    if($compression == 1)       # No compression
+    if($compression == 1)        # No compression
     {
         $recordtext = $$dataref;
     }
-    elsif($compression == 2)    # PalmDoc compression
+    elsif($compression == 2)     # PalmDoc compression
     {
         $recordtext = uncompress_palmdoc($$dataref);
+    }
+    elsif($compression == 17480) # 'Dictionary Huffman' compression
+    {
+        # This has to be handled in a separate pass, as decompression
+        # requires data from records not yet parsed.
+        debug(3,"DEBUG: record ",$currentrecord,
+              " is HUFF/CDIC-compressed text, deferring decompression");
+        return 1;
     }
     else
     {
@@ -646,13 +1237,14 @@ sub ParseRecordText :method
     if($recordtext)
     {
         $self->{text} .= $recordtext;
-        debug(3,"DEBUG: record ",$currentrecord," is text");
+        debug(3,"DEBUG: uncompressed text record ",$currentrecord);
     }
     else
     {
         debug(1,"DEBUG: record ",$currentrecord,
               " could not be decompressed (",
-              length($$dataref)," bytes)");
+              length($$dataref)," bytes starting with '",
+              substr($$dataref,0,4),"')");
         $$self{unknowndata}{$currentrecord} = $$dataref;
     }
     return 1;
@@ -846,14 +1438,14 @@ sub fix_html_filepos :method
 
         # Second, figure out what we're dealing with at the filepos
         # offset indicated
-            $atpos = substr($$self{text},$pos,5);
+        $atpos = substr($$self{text},$pos,5);
         if($atpos =~ /^<mbp/ix)
         {
             # Mobipocket-specific element
             # Insert a whole new <a id> here
             debug(2,"DEBUG: filepos ",$pos," points to '<mbp',",
                   " creating new anchor");
-            substring($$self{text},$pos,4,'<a id="' . $pos . '"></a><mbp');
+            substr($$self{text},$pos,4,'<a id="' . $pos . '"></a><mbp');
         }
         elsif($atpos =~ /^<(a|p)[ >]/ix)
         {
@@ -891,106 +1483,49 @@ sub fix_html_filepos :method
 }
 
 
-=head2 C<write_images()>
+=head2 C<uncompress_dictionaryhuffman_records()>
 
-Writes each image record to the disk.
+Uncompresses all text records using
+L</uncompress_dictionaryhuffman()>.  This destroys the existing
+contents of $self->{text} if any.
 
-Returns the number of images written.
+This method is called automatically at the end of C<Load()> if
+DictionaryHuffman encoding is detected.
 
 =cut
 
-sub write_images :method
+sub uncompress_dictionaryhuffman_records :method
 {
     my $self = shift;
     my $subname = ( caller(0) )[3];
-    debug(3,"DEBUG[",$subname,"]");
+    debug(2,"DEBUG[",$subname,"]");
 
-    my %imagedata = %{$self->{imagedata}};
+    my $huffdata = $self->{huff};
+    croak($subname,"(): no HUFF record found!\n") unless($huffdata);
 
-    foreach my $image (sort keys %imagedata)
+    my $lasttextrecord = min($self->{header}{mobi}{indxrecord},
+                             $self->{header}{mobi}{firstimagerecord}) - 1;
+    my $compressed;
+
+    if($self->{text})
     {
-        debug(1,"Writing image '",$image,"' [",
-              length(${$imagedata{$image}})," bytes]");
-        open(my $fh,">:raw",$image)
-            or croak("Unable to open '",$image,"' to write image\n");
-        print {*$fh} ${$imagedata{$image}};
-        close($fh)
-            or croak("Unable to close image file '",$image,"'\n");
+        debug(1,"WARNING: re-parsing HUFF/CDIC-compressed text destroys",
+              " existing uncompressed text.");
     }
-    return scalar(keys %imagedata);
-}
 
+    $self->{text} = '';
 
-=head2 C<write_text($filename)>
-
-Writes the book text to disk with the given filename.  This filename
-must match the filename given to L</fix_html()> for the internal links
-to be consistent.
-
-Croaks if C<$filename> is not specified.
-
-Returns 1 on success, or undef if there was no text to write.
-
-=cut
-
-sub write_text :method
-{
-    my $self = shift;
-    my $filename = shift;
-    my $subname = ( caller(0) )[3];
-    debug(3,"DEBUG[",$subname,"]");
-
-    croak($subname,"(): no filename specified.\n")
-        unless($filename);
-    return unless($$self{text});
-
-    debug(1,"DEBUG: writing text to '",$filename,
-          "', encoding ",$pdbencoding{$$self{encoding}});
-
-    open(my $fh,">",$filename)
-        or croak($subname,"(): unable to open '",$filename,"' for writing!\n");
-    if($$self{encoding} == 65001) { binmode($fh,":utf8"); }
-    else { binmode($fh); }
-    print {*$fh} $$self{text};
-    close($fh)
-        or croak($subname,"(): unable to close '",$filename,"'!\n");
-    
-    croak($subname,"(): failed to generate any text")
-        if(-z $filename);
-    
+    foreach my $recoffset (1 .. $lasttextrecord)
+    {
+        $compressed = $self->{records}->[$recoffset]->{data};
+        croak($subname,"(): no data found in record ",$recoffset,"!\n")
+            unless($compressed);
+        $self->{text} .= uncompress_dictionaryhuffman(
+            data => $compressed,
+            huff => $self->{huff},
+            cdics => $self->{cdics});
+    }
     return 1;
-}
-
-
-=head2 C<write_unknown_records()>
-
-Writes each unidentified record to disk with a filename in the format of
-'raw-record-####', where #### is the record number (not the record ID).
-
-Returns the number of records written.
-
-=cut
-
-sub write_unknown_records :method
-{
-    my $self = shift;
-    my $subname = ( caller(0) )[3];
-    debug(3,"DEBUG[",$subname,"]");
-
-    my %unknowndata = %{$self->{unknowndata}};
-
-    foreach my $rec (sort keys %unknowndata)
-    {
-        my $recstring = sprintf("%04d",$rec);
-        debug(1,"Dumping raw record ",$recstring);
-        my $rawname = "raw-record-" . $recstring;
-        open(my $fh,">:raw",$rawname)
-            or croak("Unable to open '",$rawname,"' to write raw record\n");
-        print {*$fh} $$self{unknowndata}{$rec};
-        close($fh)
-            or croak("Unable to close raw record file '",$rawname,"'\n");
-    }
-    return scalar(keys %unknowndata);
 }
 
 
@@ -998,7 +1533,118 @@ sub write_unknown_records :method
 ########## PROCEDURES ##########
 ################################
 
-=head2 parse_mobi_exth($headerdata)
+=head1 PROCEDURES
+
+All procedures are exportable, but none are exported by default.  All
+procedures can be exported by using the ":all" tag.
+
+
+=head2 C<find_mobidedrm()>
+
+Attempts to locate a copy of the MobiDeDrm script by searching PATH
+and looking in the EBook::Tools user configuration directory (see
+L<EBook::Tools/userconfigdir()>.
+
+Returns the complete path to the script, or undef if nothing was found.
+
+This will use package variable C<$mobidedrm_cmd> as its first guess,
+and set that variable to the return value as well.
+
+=cut
+
+sub find_mobidedrm
+{
+    my $subname = ( caller(0) )[3];
+    debug(2,"DEBUG[",$subname,"]");
+
+    my @guesses;
+    my $retval;
+    my $confdir = userconfigdir();
+    my $pattern = qr/^ MobiDeDrm(-\d+\.\d+)(.py)? $/ix;
+
+    if($mobidedrm_cmd and -f $mobidedrm_cmd) { return $mobidedrm_cmd; }
+    $mobidedrm_cmd = find_in_path($pattern,$confdir);
+    debug(1,"DEBUG: found mobidedrm as '",$mobidedrm_cmd,"'");
+    return $mobidedrm_cmd;
+}
+
+
+=head2 C<find_mobigen()>
+
+Attempts to locate the mobigen executable by making a test execution
+on predicted locations (including just checking PATH) and looking in
+the EBook::Tools user configuration directory (see
+L<EBook::Tools/userconfigdir()>.
+
+Returns the system command used for a successful invocation, or undef
+if nothing worked.
+
+This will use package variable C<$mobigen_cmd> as its first guess, and
+set that variable to the return value as well.
+
+=cut
+
+sub find_mobigen
+{
+    my $subname = ( caller(0) )[3];
+    debug(2,"DEBUG[",$subname,"]");
+
+    my @mobigen_guesses;
+    my $retval;
+    my $confdir = userconfigdir();
+
+    if($OSNAME eq 'MSWin32')
+    {
+        @mobigen_guesses = (
+            'mobigen',
+            'C:\Program Files\Mobipocket.com\mobigen',
+            );
+        if($confdir)
+        {
+            push(@mobigen_guesses,
+                 $confdir . '\mobigen');
+        }
+    }
+    else
+    {
+        @mobigen_guesses = (
+            'mobigen',
+            'mobigen_linux',
+            );
+        if($confdir)
+        {
+            push(@mobigen_guesses,
+                 $confdir . "/mobigen_linux",
+                 $confdir . "/mobigen");
+        }
+    }
+    unshift(@mobigen_guesses,$mobigen_cmd)
+        if($mobigen_cmd);
+    undef($mobigen_cmd);
+
+    foreach my $guess (@mobigen_guesses)
+    {
+        no warnings 'exec';
+        `$guess`;
+        # MS Windows may use 256 for a not-found code instead of -1
+        if($? != -1 && $? != 256)
+        {
+            debug(2,'DEBUG: `',$guess,'` returned ',$?);
+            $mobigen_cmd = $guess;
+            last;
+        }
+    }
+
+    if($mobigen_cmd)
+    {
+        debug(1,"DEBUG: Found mobigen as '",$mobigen_cmd,"'");
+        return $mobigen_cmd;
+    }
+    else { return; }
+}
+
+
+=head2 C<parse_mobi_exth($headerdata)>
 
 Takes as an argument a scalar containing the variable-length
 Mobipocket EXTH data from the first record.  Returns an array of
@@ -1106,12 +1752,15 @@ sub parse_mobi_exth
             last;
         }
         $exthrecord{data} = substr($headerdata,$offset,$exthrecord{length});
-        debug(3,"DEBUG: EXTH record ",$recordpos," [",$exthtypes{$exthrecord{type}},
-              "] has ",$exthrecord{length}, " bytes");
+        debug(3,"DEBUG: EXTH record ",$recordpos," [",
+              $exthtypes{$exthrecord{type}},"] has ", 
+              $exthrecord{length}, " bytes");
         push(@exthrecords,\%exthrecord);
         $offset += $exthrecord{length};
     }
     debug(1,"DEBUG: Found ",$#exthrecords+1," EXTH records");
+    debug(1,"DEBUG: Found ",$length - $offset,
+          " remaining bytes of data at EXTH offset ",$offset);
     return \@exthrecords;
 }
 
@@ -1178,11 +1827,10 @@ information is found.
 Use with caution.  This key may be renamed in the future if more
 information is found.
 
-=item C<firstimagerecord>
+=item C<indxrecord>
 
-This is thought to be an index to the first record containing image
-data.  If there are no images in the book, this value will be
-4294967295 (0xffffffff)
+This is thought to be the record offset to the first 'INDX' record, so
+named for its first four letters.
 
 Use with caution.  This key may be renamed in the future if more
 information is found.
@@ -1245,38 +1893,42 @@ is present, it should be the same as C<version>.
 Use with caution.  This key may be renamed in the future if more
 information is found.
 
-=item C<nontextrecord>
+=item C<firstimagerecord>
 
-This is thought to be an index to the first PDB record other than the
-header record that does not contain the book text.
-
-Use with caution.  This key may be renamed in the future if more
-information is found.
-
-=item C<unknown96>
-
-Unsigned long int (32-bit) at offset 96.
+This is thought to be an index to the first record containing image
+data.  If there are no images in the book, this value will be
+4294967295 (0xffffffff)
 
 Use with caution.  This key may be renamed in the future if more
 information is found.
 
-=item C<unknown100>
+=item C<huffrecord>
 
-Unsigned long int (32-bit) at offset 100.
-
-Use with caution.  This key may be renamed in the future if more
-information is found.
-
-=item C<unknown104>
-
-Unsigned long int (32-bit) at offset 104.
+This is thought to be the record offset to the 'HUFF' record, used in
+HUFF/CDIC decompression.
 
 Use with caution.  This key may be renamed in the future if more
 information is found.
 
-=item C<unknown108>
+=item C<huffreccnt>
 
-Unsigned long int (32-bit) at offset 108.
+This is thought to be the number of HUFF and CDIC records, starting at
+C<huffrecord>.
+
+Use with caution.  This key may be renamed in the future if more
+information is found.
+
+=item C<datprecord>
+
+This is thought to be the record offset to the first 'DATP' record, so
+named for its first four letters.
+
+Use with caution.  This key may be renamed in the future if more
+information is found.
+
+=item C<datpreccnt>
+
+This is thought to be the number of 'DATP' records present.
 
 Use with caution.  This key may be renamed in the future if more
 information is found.
@@ -1286,6 +1938,7 @@ information is found.
 A 32-bit bitfield related to the Mobipocket EXTH data.  If bit 6
 (0x40) is set, then there is at least one EXTH record.
 
+
 =item C<unknown116>
 
 36 bytes of unknown data at offset 116.  This value will be undefined
@@ -1294,19 +1947,65 @@ if the header data was not long enough to contain it.
 Use with caution.  This key may be renamed in the future if more
 information is found.
 
-=item C<drmcode>
 
-A number thought to be related to DRM.  If present and no DRM is set,
-contains either the value 0xFFFFFFFF (normal books) or 0x00000000
-(samples).  This value will be undefined if the header data was not
-long enough to contain it.
+=item C<drmoffset>
+
+A number thought to be the byte offset inside of the record 0 data in
+which DRM data can be found.  If present and no DRM is set, contains
+either the value 0xFFFFFFFF (normal books) or 0x00000000 (samples).
+This value will be undefined if the header data was not long enough to
+contain it.
 
 Use with caution.  This key may be renamed in the future if more
 information is found.
 
-=item C<unknown156>
 
-20 bytes of unknown data at offset 156, usually zeroes.  This value
+=item C<drmcount>
+
+A number thought to be related to DRM.
+
+This value will be undefined if the header data was not long enough to
+contain it.
+
+Use with caution.  This key may be renamed in the future if more
+information is found.
+
+
+=item C<drmsize>
+
+A number thought to be the size of the data in bytes after
+C<drmoffset> containing DRM keys.
+
+This value will be undefined if the header data was not long enough to
+contain it.
+
+Use with caution.  This key may be renamed in the future if more
+information is found.
+
+
+=item C<drmflags>
+
+A number thought to be related to DRM.
+
+This value will be undefined if the header data was not long enough to
+contain it.
+
+Use with caution.  This key may be renamed in the future if more
+information is found.
+
+
+=item C<unknown168>
+
+32 bits of unknown data at offset 168, usually zeroes.  This value
+will be undefined if the header data was not long enough to contain
+it.
+
+Use with caution.  This key may be renamed in the future if more
+information is found.
+
+=item C<unknown172>
+
+32 bits of unknown data at offset 172, usually zeroes.  This value
 will be undefined if the header data was not long enough to contain
 it.
 
@@ -1431,8 +2130,8 @@ sub parse_mobi_header   ## no critic (ProhibitExcessComplexity)
               $length," bytes.");
     }
 
-    $header{identifier}   = $list[0];
-    $header{headerlength} = $list[1];
+    $header{identifier}   = $list[0]; # Bytes 00-04 (16-20)
+    $header{headerlength} = $list[1]; # Bytes 04-08 (20-24)
     $header{type}         = $list[2];
     $header{encoding}     = $list[3];
     $header{uniqueid}     = $list[4];
@@ -1451,9 +2150,9 @@ sub parse_mobi_header   ## no critic (ProhibitExcessComplexity)
     # Third chunk is 12 bytes up to the language block
     $chunk = substr($headerdata,64,12);
     @list = unpack("NNN",$chunk);
-    $header{firstimagerecord} = $list[0];
-    $header{titleoffset}      = $list[1];
-    $header{titlelength}      = $list[2];
+    $header{indxrecord}  = $list[0];
+    $header{titleoffset} = $list[1];
+    $header{titlelength} = $list[2];
 
     # Fourth chunk is 12 bytes containing the language codes
     $chunk = substr($headerdata,76,12);
@@ -1468,10 +2167,10 @@ sub parse_mobi_header   ## no critic (ProhibitExcessComplexity)
     # Fifth chunk is 8 bytes until next unknown block
     $chunk = substr($headerdata,88,8);
     @list = unpack("NN",$chunk);
-    $header{version2}      = $list[0];
-    $header{nontextrecord} = $list[1];
+    $header{version2}         = $list[0];
+    $header{firstimagerecord} = $list[1];
 
-    debug(2,"DEBUG: first non-text record: ",$header{nontextrecord});
+    debug(2,"DEBUG: INDX record: ",$header{indxrecord});
     if($header{firstimagerecord} == 0xffffffff)
     {
         debug(2,"DEBUG: no image records present");
@@ -1481,21 +2180,13 @@ sub parse_mobi_header   ## no critic (ProhibitExcessComplexity)
         debug(2,"DEBUG: first image record: ",$header{firstimagerecord});
     }
 
-    # Sixth chunk is 16 bytes of unknown data, often zeros
+    # Sixth chunk is HUFF/CDIC and DATP record offsets 
     $chunk = substr($headerdata,96,16);
     @list = unpack("NNNN",$chunk);
-    $header{unknown96}  = $list[0];
-    $header{unknown100} = $list[1];
-    $header{unknown104} = $list[2];
-    $header{unknown108} = $list[3];
-    if($header{unknown96} || $header{unknown100}
-       || $header{unknown104} || $header{unknown108})
-    {
-        debug(2,"DEBUG: unknown data at offset 96: ",
-              sprintf("0x%08x 0x%08x 0x%08x 0x%08x",
-                      $header{unknown96},$header{unknown100},
-                      $header{unknown104},$header{unknown108}) );
-    }
+    $header{huffrecord} = $list[0];
+    $header{huffreccnt} = $list[1];
+    $header{datprecord} = $list[2];
+    $header{datpreccnt} = $list[3];
 
     # Seventh and last chunk guaranteed to be present is the EXTH
     # bitfield
@@ -1505,23 +2196,32 @@ sub parse_mobi_header   ## no critic (ProhibitExcessComplexity)
     # Remaining chunks are only parsed if the header is long enough
 
     # Eighth chunk is 36 bytes of unknown data
-    $header{unknown116} = substr($headerdata,116,36) if($length >= 152);
-
-    # Ninth chunk is 32 bits of DRM-related data
-    if($length >= 156)
+    if($length >= 152)
     {
-        $chunk = substr($headerdata,152,4);
-        $header{drmcode} = unpack("N",$chunk);
-        debug(1,"DEBUG: Found DRM code ",sprintf("0x%08x",$header{drmcode}));
+        $header{unknown116} = substr($headerdata,116,32);
+        $header{unknown148} = unpack('N',substr($headerdata,148,4));
     }
 
-    # Tenth chunk is 20 bytes of unknown data, usually zeroes
+    # Ninth chunk is 16 bytes of DRM-related data
+    if($length >= 168)
+    {
+        $chunk = substr($headerdata,152,16);
+        @list = unpack("NNNN",$chunk);
+        $header{drmoffset} = $list[0]; # Offset 152 - 155
+        $header{drmcount}  = $list[1]; # Offset 156 - 159
+        $header{drmsize}   = $list[2]; # Offset 160 - 163
+        $header{drmflags}  = $list[3]; # Offset 164 - 167
+        debug(1,"DEBUG: Found DRM offset ",
+              sprintf("0x%08x",$header{drmoffset}));
+    }
+
+    # Tenth chunk is 8 bytes of unknown data, usually zeroes
     if($length >= 176)
     {
-        $header{unknown156} = substr($headerdata,156,20);
-        $hexstring = hexstring($header{unknown156});
-        debug(2,"DEBUG: unknown data at offset 156: 0x",$hexstring)
-            if($hexstring ne ('00' x 20))
+        $chunk = substr($headerdata,168,8);
+        @list = unpack('NN',$chunk);
+        $header{unknown168} = $list[0];
+        $header{unknown172} = $list[1];
     }
 
     # Eleventh chunk is 2 16-bit values and 5 32-bit values, usually nonzero
@@ -1550,9 +2250,24 @@ sub parse_mobi_header   ## no critic (ProhibitExcessComplexity)
 
     foreach my $key (sort keys %header)
     {
-        my $value = (length $header{$key} > 10)?
-            ( '0x' . hexstring($header{$key}) )
-            : $header{$key};
+        no warnings;
+        my $value;
+        if(length($header{$key}) <= 4)
+        {
+            $value = $header{$key};
+        }
+        elsif(length($header{$key}) > 10)
+        {
+            $value = '0x' . hexstring($header{$key});
+        }
+        elsif(int($header{$key}) > 0x04ff)
+        {
+            $value = sprintf("0x%08x",$header{$key});
+        }
+        else
+        {
+            $value = $header{$key};
+        }
         debug(2,'DEBUG: mobi{',$key,'}=',$value);
     }
     return \%header;
@@ -1583,7 +2298,7 @@ sub parse_mobi_language
 {
     my ($languagecode,$regioncode) = @_;
     my $subname = ( caller(0) )[3];
-    debug(2,"DEBUG[",$subname,"]");
+    debug(3,"DEBUG[",$subname,"]");
 
     croak($subname,"(): no language code provided\n")
         unless(defined $languagecode);
@@ -1618,6 +2333,651 @@ sub parse_mobi_language
 }
 
 
+=head2 C<pid_append_checksum($pid)>
+
+Computes the Mobipocket PID checksum used as the final two bytes of
+the PID and appends them to C<$pid>, returning the merged string.
+
+Used by L</pid_is_valid($pid)>.
+
+=cut
+
+sub pid_append_checksum
+{
+    my $pid = shift;
+    my $subname = ( caller(0) )[3];
+    debug(2,"DEBUG[",$subname,"]");
+
+    my $retval = $pid;
+    my $crc;
+    my $byte;
+    my $pos;
+
+    my $letters = "ABCDEFGHIJKLMNPQRSTUVWXYZ123456789";
+    my $length = length($letters);
+    $crc = ~ crc32($pid,-1);
+    $crc = $crc & 0xffffffff;
+    $crc = $crc ^ ($crc >> 16);
+    for(0 .. 1)
+    {
+        $byte = $crc & 0xff;
+        $pos = (int($byte / $length)) ^ ($byte % $length);
+        $retval .= substr($letters,$pos % $length,1);
+        $crc >>= 8;
+    }
+    return $retval;
+}
+
+
+=head2 C<pid_is_valid($pid)>
+
+Returns 1 if the PID is a valid Mobipocket/Kindle PID and 0 otherwise.
+
+This is determined by first ensuring that C<$pid> is exactly ten bytes
+long, and then stripping the final two bytes normally used as a
+checksum and recomputing them, returning 1 only if they are recomputed
+correctly.
+
+=cut
+
+sub pid_is_valid
+{
+    my $pid = shift;
+    my $subname = ( caller(0) )[3];
+    debug(2,"DEBUG[",$subname,"]");
+
+    return 0 unless($pid);
+
+    my $pid2 = pid_append_checksum(substr($pid,0,-2));
+
+    return 0 unless(length($pid) == 10);
+    if($pid eq $pid2) { return 1; }
+    else { return 0; }
+}
+
+
+=head2 C<pukall_cipher_1(%args)>
+
+This is a COMPLETELY UNTESTED implementation of the Pukall Cipher 1
+algorithm used for encryption and decryption in Mobipocket files.  It
+is a 128-bit stream cipher.  For more information and alternate
+implementations, see L<http://membres.lycos.fr/pc1/>.
+
+Use at your own risk.  Bug reports appreciated.
+
+=head3 Arguments
+
+=over
+
+=item * C<key>
+
+16-byte encryption key.  This must be provided, and must be exactly 16
+bytes, or the procedure will croak.
+
+=item * C<input>
+
+Input data to be either encrypted or decrypted.  If this is not
+provided, the procedure croaks.
+
+=item * C<encrypt> (optional)
+
+If set to true, the cipher will be used to encrypt the input data.  If
+not set, or set to false, the cipher will be used to decrypt the input
+data.
+
+=back
+
+=cut
+
+sub pukall_cipher_1
+{
+    my %args = @_;
+    my $subname = ( caller(0) )[3];
+    debug(2,"DEBUG[",$subname,"]");
+
+    my %valid_args = (
+        'key' => 1,
+        'input' => 1,
+        'encrypt' => 1,
+        );
+    foreach my $arg (keys %args)
+    {
+        croak($subname,"(): invalid argument '",$arg,"'")
+            if(!$valid_args{$arg});
+    }
+
+    croak($subname,"(): no key provided!\n")
+        unless(defined $args{key});
+    croak($subname,"(): no input provided!\n")
+        unless(defined $args{input});
+
+    my $key = $args{key};
+    my $keylength = length($key);
+    my $encrypt = $args{encrypt} || 0;
+    my $input = $args{input};
+    my $output = '';
+
+    croak($subname,"(): Invalid key length (expected 16, got ",
+          $keylength,")!\n")
+        unless($keylength == 16);
+
+    my @keyarray;
+    my $key_xor = 0;
+    my $sum1 = 0;
+    my $sum2 = 0;
+    my $byte;
+    my $byte_xor;
+    my $temp_xor;
+
+    foreach my $pos (0 .. 7)
+    {
+        $byte = ord(substr($key,$pos*2,1) << 8) | ord(substr($key,$pos*2+1,1));
+        $keyarray[$pos] = $byte;
+    }
+
+    foreach my $offset ( 0 .. length($input) )
+    {
+        $temp_xor = 0;
+        $byte_xor = 0;
+        foreach my $keypos (0 .. 7)
+        {
+            $temp_xor ^= $keyarray[$keypos];
+            $sum2 = ($sum2 + $keypos) * 20021 + $sum1;
+            $sum1 = ($temp_xor * 346) & 0xFFFF;
+            $sum2 = ($sum1 + $sum2) & 0xFFFF;
+            $temp_xor = ($temp_xor * 20021 + 1) & 0xFFFF;
+            $byte_xor ^= $temp_xor ^ $sum2;
+        }
+        $byte = ord(substr($input,$offset,1));
+        if($encrypt) { $key_xor = $byte * 257; }
+        $byte = (($byte ^ ($byte_xor >> 8)) ^ $byte_xor) & 0xFF;
+        if(!$encrypt) { $key_xor = $byte * 257; };
+        foreach my $keypos (0 .. 7)
+        {
+            $keyarray[$keypos] ^= $key_xor;
+        }
+        $output .= chr($byte);
+    }
+    return $output;
+}
+
+
+=head2 C<system_mobidedrm(%args)>
+
+Runs python on a copy of MobiDeDrm.py if it is available (not included
+with this distribution) to downconvert a Mobipocket file.
+
+Returns the output filename on success, or undef otherwise.
+
+
+=head3 Arguments
+
+=over
+
+=item * C<infile>
+
+The input filename.  If not specified or invalid, the procedure
+returns undef.
+
+=item * C<outfile>
+
+The output filename.  If not specified, the program will use a name
+based on the input file, appending '-nodrm' to the basename and
+keeping the extension.  In the special case of Mobipocket files ending
+in '-sm', the '-sm' portion of the basename is simply removed, and
+nothing else is appended.
+
+=item * C<pid>
+
+The PID to use to decrypt the file.  If not specified or invalid, the
+procedure returns undef.
+
+=back
+
+=cut
+
+sub system_mobidedrm
+{
+    my %args = @_;
+    my $subname = ( caller(0) )[3];
+    debug(2,"DEBUG[",$subname,"]");
+
+    my %valid_args = (
+        'infile' => 1,
+        'outfile' => 1,
+        'pid' => 1,
+        );
+    foreach my $arg (keys %args)
+    {
+        croak($subname,"(): invalid argument '",$arg,"'")
+            if(!$valid_args{$arg});
+    }
+
+    if(!$args{infile})
+    {
+        debug(1,$subname,"(): no input file specified!");
+        return;
+    }
+
+    if(! -f $args{infile})
+    {
+        debug(1,$subname,"(): input file '",$args{infile},"' not found!");
+        return;
+    }
+
+    if(! pid_is_valid($args{pid}))
+    {
+        debug(1,$subname,"(): pid '",$args{pid},"' is not valid!");
+        return;
+    }
+           
+    if( !find_mobidedrm() )
+    {
+        debug(1,$subname,"(): MobiDeDRM is not available!");
+        return;
+    }
+
+    my $outfile = $args{outfile};
+    my $suffix;
+    if(!$outfile)
+    {
+        ($outfile,undef,$suffix) = fileparse($args{infile},'\.\w+$');
+        if($outfile =~ /-sm$/ix)
+        {
+            $outfile =~ s/-sm$//ix;
+            $outfile .= $suffix;
+        }
+        else
+        {
+            $outfile .= '-nodrm' . $suffix;
+        }
+    }
+    
+    my $retval = system('python',$mobidedrm_cmd,
+                        $args{infile},$outfile,$args{pid});
+    
+    if($retval == -1 or $retval == 256)
+    {
+        debug(1,$subname,"(): python not available!");
+        return;
+    }
+
+    if(-z $outfile)
+    {
+        debug(1,$subname,"(): MobiDeDRM produced 0-sized output!");
+        unlink($outfile);
+        return;
+    }
+    return $outfile;
+}
+
+
+=head2 C<system_mobigen(%args)>
+
+Runs C<mobigen> to convert OPF, HTML, or ePub input into a Mobipocket
+.prc/.mobi book.  The procedure L<find_mobigen()> is called to locate
+the executable.
+
+Returns the return value from mobigen, or undef if no filename was
+specified or the file did not exist.  Also returns undef if mobigen
+could not be found.
+
+=head3 Arguments
+
+=over
+
+=item * C<infile>
+
+The input filename.  If not specified or invalid, the procedure
+returns undef.
+
+=item * C<outfile>
+
+The output filename.  The mobigen executable will choose its own
+filename for direct output, but if this argument is specified, the
+output file will be renamed to the specified filename instead.
+
+If not specified, the default output will be left in place.
+
+=item * C<dir>
+
+The directory in which to place the output file.  The mobigen
+executable itself will always place its output into the current
+working directory, but if this argument is specified, the output file
+will be moved into the specified directory, creating that directory if
+necessary.
+
+=item * C<compression>
+
+Compression level from 0-2, where 0 is no compression, 1 is PalmDoc
+compression, and 2 is HUFF/CDIC compression.  If not specified,
+defaults to 1 (PalmDoc compression).
+
+=back
+
+=cut
+
+sub system_mobigen
+{
+    my %args = @_;
+    my $subname = ( caller(0) )[3];
+    debug(2,"DEBUG[",$subname,"]");
+
+    my %valid_args = (
+        'infile' => 1,
+        'outfile' => 1,
+        'dir' => 1,
+        'compression' => 1,
+        );
+    foreach my $arg (keys %args)
+    {
+        croak($subname,"(): invalid argument '",$arg,"'")
+            if(!$valid_args{$arg});
+    }
+
+    if(!$args{infile})
+    {
+        debug(1,$subname,"(): no input file specified!");
+        return;
+    }
+
+    if(! -f $args{infile})
+    {
+        debug(1,$subname,"(): input file '",$args{infile},"' not found!");
+        return;
+    }
+
+    find_mobigen();
+    if(!$mobigen_cmd)
+    {
+        debug(1,$subname,"(): mobigen command not specified!");
+        return;
+    }
+
+    my @mobigen = ($mobigen_cmd);
+    my $mobigenoutput = fileparse($args{infile},'\.\w+$') . '.mobi';
+    my $outfile = $args{outfile} || $mobigenoutput;
+    my $compression = $args{compression};
+    my $retval;
+
+    if(defined $compression)
+    {
+        unless($compression >= 0 and $compression <= 2)
+        {
+            croak($subname,"(): invalid compression level ",
+                  $compression,"!\n");
+        }
+    }
+    else { $compression = 1; }
+
+    push(@mobigen,"-c$compression",$args{infile});
+    debug(2,"DEBUG: Compiling '",$args{infile},"' into '",$mobigenoutput,
+          "' using compression level ",$compression);
+
+    $retval = system(@mobigen);
+    if($retval)
+    {
+        debug(1,"WARNING: mobigen exited ",$retval);
+    }
+    if(! -f $mobigenoutput)
+    {
+        carp($subname,"(): expected output file '",$mobigenoutput,
+              "' not found!\n");
+    }
+    if($args{outfile})
+    {
+        rename($mobigenoutput,$args{outfile})
+            or carp($subname,"(): unable to rename '",$mobigenoutput,"' to '",
+                    $args{outfile},"'!\n");
+    }
+    if($args{dir})
+    {
+        if(! -d $args{dir})
+        {
+            mkpath($args{dir})
+                or carp($subname,"(): unable to create directory '",
+                        $args{dir},"'!\n");
+        }
+        rename($outfile,"$args{dir}/$outfile")
+            or carp($subname,"(): unable to move '",$outfile,"' into '",
+                    $args{dir},"'!\n");
+    }
+    return $retval;
+}
+
+
+=head2 C<uncompress_dictionaryhuffman(%args)>
+
+Uncompresses text compressed with the DictionaryHuffman compression
+scheme.
+
+=head3 Arguments
+
+=over
+
+=item * C<data>
+
+A scalar containing the compressed data to uncompress.
+
+=item * C<huff>
+
+A hashref pointing to the HUFF record data
+
+=item * C<cdics>
+
+An arrayref pointing to the CDIC record data
+
+=item * C<depth>
+
+The current depth of the huffman tree, currently only used in
+debugging.
+
+=back
+
+=cut
+
+sub uncompress_dictionaryhuffman
+{
+    my (%args) = @_;
+    my $subname = (caller(0))[3];
+    debug(3,"DEBUG[",$subname,"]");
+
+    my %valid_args = (
+        'data' => 1,
+        'huff' => 1,
+        'cdics' => 1,
+        'depth' => 1,
+        );
+    foreach my $arg (keys %args)
+    {
+        croak($subname,"(): invalid argument '",$arg,"'")
+            if(!$valid_args{$arg});
+    }
+
+    croak($subname,"(): no data provided!\n") 
+        unless($args{data});
+
+    # Why does $data have to be zero-terminated this way?  Sometimes it
+    # runs out of bits otherwise, though.
+    my $data = $args{data} . "\x00";
+    my $octets = length($data);
+    my $depth = $args{depth} || 0;
+    debug(3,"DEBUG: uncompressing ",$octets," octets at depth ",$depth);
+
+    my $huffref = $args{huff};
+    my $cdicref = $args{cdics};
+    my $cdic;
+    my $dataoffset = 0;
+    my ($bits, $nextbits);
+    my ($cacheoffset, $cacheval);
+
+    my $codeword;       # CDIC codeword
+    my $codebits;       # Extra bits at the end of $codeword
+    my $codelength;     # number of bits in the code
+    my $index;          # CDIC index key
+
+    my $branch;         
+    my $branchcode;
+    my $branchsize;
+    my $branchoffset;
+
+    my $text = '';
+
+    my $bitsize = length($data) * 8;
+    my $bitvector = Bit::Vector->new($bitsize);
+    my $bitoffset;
+    my $bitpos = 0;
+
+    # Unfortunately, the bitstream needs to be processed from left to
+    # right, and Bit::Vector really likes to process from right to
+    # left, so we have to process by chunk instead of using
+    # Block_Store
+    while($bitpos < $bitsize)
+    {
+        $bitoffset = $bitsize-$bitpos;
+        $bits = unpack('C',substr($data,$dataoffset,1));
+        $bitvector->Chunk_Store(8,$bitoffset-8,$bits);
+        $dataoffset++;
+        $bitpos += 8;
+    }
+
+
+    # Debugging code inside the loop is commented out because each
+    # subroutine call incurs substantial overhead (even when the
+    # debugging level is low enough that nothing is printed).
+
+    $bitpos = 0;
+    do
+    {
+        $bitoffset = $bitsize-$bitpos;
+#        debug(4,"\nDEBUG: DEPTH ",$depth," BITPOS ",$bitpos,
+#              " [bitoffset=",$bitoffset,"]");
+        $nextbits = min(8,$bitoffset);
+        $cacheoffset = $bitvector->Chunk_Read($nextbits,$bitoffset-$nextbits);
+        if($cacheoffset > $#{$huffref->{cache}})
+        {
+            croak($subname,"(): invalid HUFF cache offset ",$cacheoffset,
+                  " found at bit position ",$bitpos,"!\n");
+            return $text;
+        }
+        $cacheval = $huffref->{cache}->[$cacheoffset];
+#        debug(4,"## cacheval[",$cacheoffset,"]=",$cacheval);
+        $codelength = $cacheval & 0x1F; # low 5 bits
+#        debug(4,"## codelength=",$codelength);
+        if(!$codelength)
+        {
+            croak($subname,"(): HUFF cache found zero codelength",
+                  " at bit position ",$bitpos,"!\n");
+            return $text;
+        }
+
+        $nextbits = min(32,$bitoffset);
+        $bits = $bitvector->Chunk_Read($nextbits,$bitoffset-$nextbits);
+#        debug(4,"## bits=",sprintf("%0${nextbits}b",$bits));
+
+        if(!$bits)
+        {
+#            debug(2,"DEBUG: no more data, returning from depth ",
+#                  $depth," with:");
+#            debug(2,"       '",excerpt_line($text),"'");
+            return $text;
+        }
+        if($codelength > $bitoffset)
+        {
+            carp($subname,"():\n",
+                 "WARNING: ran out of bits at depth ",$depth,"!\n");
+
+            if($bits)
+            {
+                carp($subname,"():\n",
+                     "supposedly out of bits, but bit data still exists!\n");
+            }
+            debug(2,"DEBUG: returning from depth ",$depth," with '",$text,"'");
+            return $text;
+        }
+
+        $codebits = $bitvector->Chunk_Read($codelength,$bitoffset-$codelength);
+#        debug(4,"## codebits=",$codebits);
+        if($cacheval & 0x80)
+        {
+            # Codeword is unique and in the short codewords cache
+            $codeword = ($cacheval >> 8) - $codebits;
+        }
+        unless($cacheval & 0x80)
+        {
+            # Code is not in the cache, must be looked up from base
+            # table.  The problem is, the codelength is not known, so
+            # we have to iterate through the basetable adding bits to
+            # the code until the code is larger than the table value.
+            #
+            # There has to be a better way to do this?
+#            debug(4,"## code not in cache");
+            while($codebits < $huffref->{basetable}->[($codelength-1)*2])
+            {
+                $codelength++;
+#                debug(4,"## codelength extended to ",$codelength);
+                $codebits = $bitvector->Chunk_Read($codelength,$bitoffset-$codelength);
+            }
+            $codeword = $huffref->{basetable}->[($codelength-1)*2+1];
+            $codeword -= $codebits;
+        }
+#        debug(4,"## codeword=",$codeword);
+        $cdic = $codeword >> $huffref->{codelength};
+        if($cdic > $#{$cdicref})
+        {
+            croak($subname,"(): \n HUFF entry referenced invalid CDIC ",$cdic,
+                  " at bit position ",$bitpos,", depth ",$depth,"!\n");
+            return $text;
+        }
+
+#        debug(4,"## cdic=",$cdic);
+        $index = $codeword - ($cdic << $huffref->{codelength});
+#        debug(4,"## cdic[",$cdic,"][",$index,"]=",
+#              $cdicref->[$cdic]->{indexes}->[$index]);
+        $branchoffset = 16 + $cdicref->[$cdic]->{indexes}->[$index];
+#        debug(4,"## branchoffset=",$branchoffset);
+
+        # 15 lowest bits of $branchcode are the size of the leaf in
+        # bytes -- however, only sizes 1-127 are ever used?
+        # 16th bit is set if the leaf is the end of the tree and no
+        # recursion is needed
+        $branchcode = unpack('n',substr($cdicref->[$cdic]->{data},
+                                           $branchoffset,2) );
+        $branchsize = $branchcode & 0x7fff;
+#        debug(4,"## branchcode=",$branchcode,"  branchsize=",$branchsize,
+#              "  branchcode&0x8000=",$branchcode & 0x8000);
+        if(!$branchsize || $branchsize > 127)
+        {
+            carp($subname,"():\n",
+                 " HUFF branch at bit position ",$bitpos,", depth ",$depth,
+                 " has size ",$branchsize," (expected 1-127)\n");
+        }
+        $branch = substr($cdicref->[$cdic]->{data},$branchoffset+2,$branchsize);
+        if($branchcode & 0x8000)
+        {
+            # End of tree.  Append branch to text.
+#            debug(4,"## branch='",$branch,"'");
+            $text .= $branch;
+        }
+        else
+        {
+#            debug(2,"DEBUG: recursing at depth ",$depth,
+#                  " with:");
+#            debug(2,"       '",excerpt_line($text),"'");
+            $text .= uncompress_dictionaryhuffman(
+                data => $branch,
+                huff => $args{huff},
+                cdics => $args{cdics},
+                depth => $depth + 1);
+        }
+        $bitpos += $codelength;
+    } while($bitpos < length($data) * 8);
+#    debug(2,"DEBUG: returning from depth ",$depth," with:");
+#    debug(2,"       '",excerpt_line($text),"'");
+    return $text;
+}
+
+
 =head2 C<unpack_mobi_language($data)>
 
 Takes as an argument 4 bytes of data.  If less data is provided, the
@@ -1635,6 +2995,10 @@ See C<%mobilangcodes> for an exact map of values.  Note that the
 bottom two bits of the region code appear to be unused (i.e. the
 values are all multiples of 4).  The unknown code integer appears to
 be unused, and is generally zero.
+
+The original implementation by Mobipocket may have been via
+Microsoft's .NET CultureInfo class.  See:
+L<http://msdn.microsoft.com/en-us/library/system.globalization.cultureinfo(VS.71).aspx>
 
 =cut
 
@@ -1671,12 +3035,20 @@ sub unpack_mobi_language
 
 =over
 
-=item * Mobipocket HuffDic encoding (used mostly on dictionaries)
-isn't supported yet.
+=item * Unpacking DRM-protected text isn't supported.  Although
+infrastructure may be added later to make use of external helpers and
+plugins, direct DRM support will never be added to the main code for
+legal reasons.
+
+=item * Mobipocket HUFF/CDIC decoding (used mostly on dictionaries)
+isn't well documented.
 
 =item * Not all Mobipocket data is understood, so a conversion from
 OPF to Mobipocket .prc back to OPF will not result in all data being
 retained.  Patches welcome.
+
+=item * Mobipocket INDX, DATP, FCIS, and FLIS records are not
+understood and are completely ignored
 
 =item * Mobipocket EXTH subjectcode records may not end up attached to
 the correct subject element if the number of subject records differs

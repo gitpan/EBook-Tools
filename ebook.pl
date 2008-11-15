@@ -1,8 +1,9 @@
 #!/usr/bin/perl
 use warnings; use strict;
-use version; our $VERSION = qv("0.2.0");
-# $Revision: 132 $ $Date: 2008-11-01 15:28:12 -0400 (Sat, 01 Nov 2008) $
-# $Id: ebook.pl 132 2008-11-01 19:28:12Z zed $
+use 5.010;
+use version; our $VERSION = qv("0.3.0");
+# $Revision: 181 $ $Date: 2008-11-15 12:34:52 -0500 (Sat, 15 Nov 2008) $
+# $Id: ebook.pl 181 2008-11-15 17:34:52Z zed $
 
 
 =head1 NAME
@@ -18,12 +19,41 @@ See also L</EXAMPLES>.
 =cut
 
 
-use EBook::Tools qw(split_metadata split_pre strip_script
-                    system_tidy_xhtml system_tidy_xml);
+use Config::IniFiles;
+use EBook::Tools qw(:all);
+use EBook::Tools::Mobipocket qw(:all);
+use EBook::Tools::MSReader qw(:all);
 use EBook::Tools::Unpack;
 use File::Basename 'fileparse';
-use File::Path;    # Exports 'mkpath' and 'rmtree'
+use File::Path;              # Exports 'mkpath' and 'rmtree'
+use File::Slurp qw(slurp);   # Also exports 'read_file' and 'write_file'
 use Getopt::Long qw(:config bundling);
+
+# Exit values
+use constant EXIT_SUCCESS       => 0;   # Success
+use constant EXIT_BADCOMMAND    => 1;   # Invalid main command
+use constant EXIT_BADOPTION     => 2;   # Invalid subcommand or option
+use constant EXIT_BADINPUT      => 10;  # Bad input data
+use constant EXIT_BADOUTPUT     => 11;  # Bad/unexpected output data
+use constant EXIT_TOOLSERROR    => 20;  # Internal EBook::Tools error
+use constant EXIT_MISSINGHELPER => 30;  # Required helper file not found
+use constant EXIT_HELPERERROR   => 31;  # Helper command exited improperly
+
+
+########################################
+########## CONFIGURATION FILE ##########
+########################################
+
+my $defaultconfig = slurp(\*DATA);
+my $configdir = userconfigdir();
+my $configfile = $configdir . '/config.ini';
+my $config = Config::IniFiles->new( -file => $configfile );
+$config = Config::IniFiles->new() unless($config);
+#$config->read($configfile);
+
+# Tidysafety requires special handling, since 0 is a valid value
+my $tidysafety = $config->val('config','tidysafety');
+undef($tidysafety) if($tidysafety eq '');
 
 
 #####################################
@@ -32,14 +62,18 @@ use Getopt::Long qw(:config bundling);
 
 my %opt = (
     'author'      => '',
+    'compression' => undef,
     'dir'         => '',
     'fileas'      => '',
     'filename'    => '',
     'help'        => 0,
     'htmlconvert' => 0,
     'id'          => '',
+    'inputfile'   => '',
+    'key'         => '',
     'mimetype'    => '',
     'mobi'        => 0,
+    'mobigencmd'  => $config->val('helpers','mobigen'),
     'nosave'      => 0,
     'noscript'    => 0,
     'oeb12'       => 0,
@@ -47,23 +81,27 @@ my %opt = (
     'opffile'     => '',
     'raw'         => 0,
     'tidy'        => 0,
-    'tidycmd'     => '',
-    'tidysafety'  => 1,
+    'tidycmd'     => $config->val('helpers','tidy'),
+    'tidysafety'  => $tidysafety,
     'title'       => '',
-    'verbose'     => 0,
+    'verbose'     => $config->val('config','debug') || 0,
     );
 
 GetOptions(
     \%opt,
     'author=s',
+    'compression|c=i',
     'dir|d=s',
     'fileas=s',
     'filename|file|f=s',
     'help|h|?',
     'htmlconvert',
     'id=s',
+    'inputfile|infile=s',
+    'key|pid=s',
     'mimetype|mtype=s',
     'mobi|m',
+    'mobigencmd|mobigen=s',
     'nosave',
     'noscript',
     'raw',
@@ -80,7 +118,7 @@ GetOptions(
 if($opt{oeb12} && $opt{opf20})
 {
     print "Options --oeb12 and --opf20 are mutually exclusive.\n";
-    exit(1);
+    exit(EXIT_BADOPTION);
 }
 
 # Default to OEB12 if neither format is specified
@@ -88,14 +126,23 @@ if(!$opt{oeb12} && !$opt{opf20}) { $opt{oeb12} = 1; }
 
 $EBook::Tools::debug = $opt{verbose};
 $EBook::Tools::tidycmd = $opt{tidycmd} if($opt{tidycmd});
-$EBook::Tools::tidysafety = $opt{tidysafety};
+$EBook::Tools::tidysafety = $opt{tidysafety} if(defined $opt{tidysafety});
+
+
+######################################
+########## COMMAND HANDLING ##########
+######################################
 
 my %dispatch = (
     'adddoc'      => \&adddoc,
     'additem'     => \&additem,
     'blank'       => \&blank,
+    'dc'          => \&downconvert,
+    'downconvert' => \&downconvert,
+    'config'      => \&config,
     'fix'         => \&fix,
     'genepub'     => \&genepub,
+    'genmobi'     => \&genmobi,
     'setmeta'     => \&setmeta,
     'splitmeta'   => \&splitmeta,
     'splitpre'    => \&splitpre,
@@ -111,13 +158,13 @@ if(!$cmd)
 {
     print "No command specified.\n";
     print "Valid commands are: ",join(" ",sort keys %dispatch),"\n";
-    exit(1);
+    exit(EXIT_BADCOMMAND);
 }    
 if(!$dispatch{$cmd})
 {
     print "Invalid command '",$cmd,"'\n";
     print "Valid commands are: ",join(" ",sort keys %dispatch),"\n";
-    exit(1);
+    exit(EXIT_BADCOMMAND);
 }
 
 $dispatch{$cmd}(@ARGV);
@@ -182,7 +229,7 @@ sub adddoc
     }
     $ebook->save;
     $ebook->print_warnings;
-    exit(0);
+    exit(EXIT_SUCCESS);
 }
 
 
@@ -235,7 +282,7 @@ sub additem
     if(!$id)
     {
         print {*STDERR} "You must specify an ID when adding a document!\n";
-        exit(21);
+        exit(EXIT_BADOPTION);
     }
 
     my $ebook = EBook::Tools->new();
@@ -245,13 +292,11 @@ sub additem
     {
         print {*STDERR} "Unrecoverable errors found.  Aborting.\n";
         $ebook->print_errors;
+        exit(EXIT_TOOLSERROR);
     }
     $ebook->save;
     $ebook->print_warnings;
-    exit(0);
-    
-    print "STUB!\n";
-    exit(255);
+    exit(EXIT_SUCCESS);
 }
 
 
@@ -315,7 +360,326 @@ sub blank
         useoptdir();
         $ebook->save;
     }
-    exit(0);
+    exit(EXIT_SUCCESS);
+}
+
+
+=head2 C<config>
+
+Make changes to the EBook::Tools configuration file.
+
+The configuration file itself is located as either
+C<$ENV{HOME}/.ebooktools/config.ini> or as
+C<$ENV{USERPROFILE}\Application Data\EBook-Tools>, depending on
+platform and which directory is found first.  See
+L<EBook::Tools/userconfigdir()> for details.
+
+=head3 Arguments / Subcommands
+
+Configuration is always handled in the format of:
+
+ ebook config subcommand value
+
+=over
+
+=item * C<default>
+
+Replace any existing configuration file with a default template.  This
+creates the file if it does not exist.  This should be done once
+before any other configuration manipulation is done, unless a
+configuration file has been manually created ahead of time.
+
+=item * C<debug>
+
+Sets the default debugging level when no verbosity is specified.  Note
+that verbosity can only be increased, not decreased, with the C<-v>
+option.
+
+=item * C<tidysafety>
+
+Sets the default safety level when tidy is used.  Valid values are
+from 0-4.  See L</unpack> for details on what each value means.
+
+=item * C<mobipids>
+
+A comma-separated list of Mobipocket PIDs to try to use to decrypt
+e-books.  This value is only used if the appropriate plug-in modules
+or helper applications are available, as DRM is not supported natively
+by EBook::Tools.  Note that if the PID includes a $ character, the
+entire PID string has to be enclosed in single quotes.
+
+=back
+
+=head3 Examples
+
+ ebook config default
+ ebook config debug 2
+ ebook config mobipids '1234567890,2345678$90'
+
+=cut
+
+sub config
+{
+    my $subcommand = shift;
+    my $value = shift;
+    my $subname = ( caller(0) )[3];
+    
+    my %valid_subcommands = (
+        'default' => 1,
+        'debug' => 1,
+        'tidysafety' => 1,
+        'mobipids' => 1,
+        );
+
+    if(!$subcommand)
+    {
+        print {*STDERR} ("You must specify what configuration change you",
+                         " want to make.\n");
+        print {*STDERR} "Valid config commands are:\n";
+        foreach my $subcom (keys %valid_subcommands)
+        {
+            print {*STDERR} "  config ",$subcom,"\n";
+        }
+        exit(EXIT_BADCOMMAND);
+    }
+    if(!$valid_subcommands{$subcommand})
+    {
+        print {*STDERR} "Invalid command 'config ",$subcommand,"'\n";
+        print {*STDERR} "Valid config commands are:\n";
+        foreach my $subcom (keys %valid_subcommands)
+        {
+            print {*STDERR} "  config ",$subcom,"\n";
+        }
+        exit(EXIT_BADCOMMAND);
+    }
+
+    if($subcommand eq 'default')
+    {
+        my $fh_config;
+        local $/;
+        
+        say "Creating new configuration file '",$configfile,"'";
+        open($fh_config,'>',$configfile)
+            or die("Unable to open config file '",$configfile,"' for writing!\n");
+        print {*$fh_config} $defaultconfig;
+        close($fh_config)
+            or die("Unable to close config file '",$configfile,"'!\n");
+    }
+    elsif($subcommand eq 'debug')
+    {
+        if(not defined $value)
+        {
+            say {*STDERR} "You must specify a debugging level.";
+            exit(EXIT_BADOPTION);
+        }            
+        $config->setval('config','debug',$value);
+        $config->RewriteConfig;
+    }
+    elsif($subcommand eq 'tidysafety')
+    {
+        if(not defined $value)
+        {
+            say {*STDERR} "You must specify a tidy safety level.";
+            exit(EXIT_BADOPTION);
+        }            
+        $config->setval('config','tidysafety',$value);
+        $config->RewriteConfig;
+    }
+    elsif($subcommand eq 'mobipids')
+    {
+        my @pids;
+        if(!$value)
+        {
+            say {*STDERR} "You must specify at least one PID.";
+            exit(EXIT_BADOPTION);
+        }
+        @pids = split(/,/,$value);
+        foreach my $pid (@pids)
+        {
+            if(!pid_is_valid($pid))
+            {
+                say {*STDERR} "PID '",$pid,"' is not valid!  Aborting!";
+                exit(EXIT_BADOPTION);
+            }
+        }
+        $config->setval('drm','mobipids',$value);
+        $config->RewriteConfig;
+    }
+    exit(EXIT_SUCCESS);
+}
+
+
+=head2 C<downconvert>
+
+=head2 C<dc>
+
+If the appropriate helpers or plugins are available, write a copy of
+the input file with the DRM restrictions removed.
+
+NOTE: no actual DRM-removal code is present in this package.  This is
+just presents a unified interface to other programs that have that
+capability.
+
+=head3 Arguments
+
+=over
+
+=item * C<infile>
+
+The first non-option argument is taken to be the input file.  If not
+specified, the program exits with an error.
+
+=item * C<outfile>
+
+The second non-option argument is taken to be the output file.  If not
+specified, the program will use a name based on the input file,
+appending '-nodrm' to the basename and keeping the extension.  In the
+special case of Mobipocket files ending in '-sm', the '-sm' portion of
+the basename is simply removed, and nothing else is appended.
+
+=item * C<key>
+
+The third non-option argument is taken to be either the decryption
+key/PID, or in the case of Microsoft Reader (.lit) files, the
+C<keys.txt> file containing the decryption keys.
+
+If not specified, this will be looked up from the configuration file.
+Convertlit keyfiles will be looked for in standard locations.  If no
+key is found, the command aborts and exits with an error.
+
+=back
+
+=head3 Example
+
+ ebook downconvert NewBook.lit NewBook-readable.lit mykeys.txt
+ ebook dc MyBook-sm.prc
+
+=cut
+
+sub downconvert
+{
+    my ($infile,$outfile,$key) = @_;
+    my $suffix;
+    my $mobidedrm = find_mobidedrm();
+    my $convertlit = find_convertlit();
+    my $status;
+
+    if(!$infile)
+    {
+        say {*STDERR} "You must specify a file to downconvert.";
+        exit(EXIT_BADOPTION);
+    }
+    unless(-f $infile)
+    {
+        print {*STDERR} "Could not find '",$infile,"' to downconvert!\n";
+        exit(EXIT_BADINPUT);
+    }
+
+    my $unpacker = EBook::Tools::Unpack->new(
+        'file' => $infile,
+        'format' => $opt{format},
+        );
+
+    if($unpacker->format eq 'mobipocket')
+    {
+        if(!$mobidedrm)
+        {
+            say {*STDERR} <<'END';
+Downconverting Mobipocket books requires that MobiDeDRM be available,
+either on the path, in the configuration directory, or specified in
+the configuration file.
+END
+            exit(EXIT_MISSINGHELPER);
+        }
+        if($key)
+        {
+            if(!pid_is_valid($key))
+            {
+                say {*STDERR} "PID '",$key,"' is not valid!";
+                exit(EXIT_BADOPTION);
+            }
+            $outfile = system_mobidedrm(infile => $infile,
+                                        outfile => $outfile,
+                                        pid => $key);
+            if(!$outfile)
+            {
+                say {*STDERR} "Failed to downconvert '",$infile,"'!";
+                exit(EXIT_HELPERERROR);
+            }
+        }
+        else
+        {
+            my @pids = split(/,/,$config->val('drm','mobipids'));
+            if(!@pids)
+            {
+                say {*STDERR}
+                "No PID specified, and none found in configuration file!";
+                exit(EXIT_BADOPTION);
+            }
+            foreach my $pid (@pids)
+            {
+                if(!pid_is_valid($pid))
+                {
+                    say {*STDERR} "PID '",$pid,"' is not valid, skipping!";
+                    next;
+                }
+                $outfile = system_mobidedrm(infile => $infile,
+                                            outfile => $outfile,
+                                            pid => $pid);
+                last if($outfile);
+            }
+            if($outfile)
+            {
+                say("Successfully downconverted '",$infile,
+                    "' into '",$outfile,"'");
+                exit(EXIT_SUCCESS);
+            }
+            else
+            {
+                say "Unable to downconvert '",$infile,"'!";
+                exit(EXIT_BADOUTPUT);
+            }
+        } # if($key) / else
+    } # if($unpacker->format eq 'mobipocket')
+
+    elsif($unpacker->format eq 'msreader')
+    {
+        if(!$convertlit)
+        {
+            say {*STDERR} <<'END';
+Downconverting MS Reader books requires that ConvertLit be available,
+either on the path, in the configuration directory, or specified in
+the configuration file.
+END
+            exit(EXIT_MISSINGHELPER);
+        }
+        if(!$outfile)
+        {
+            ($outfile,undef,$suffix) = fileparse($infile,'\.\w+$');
+            $outfile .= '-nodrm' . $suffix;
+        }
+        my $retval = system_convertlit(infile => $infile,
+                                       outfile => $outfile,
+                                       keyfile => $key);
+        if($retval == 0)
+        {
+            say("Successfully downconverted '",$infile,
+                "' into '",$outfile,"'");
+            exit(EXIT_SUCCESS);
+        }
+        else
+        {
+            say("Failed to downconvert '",$infile,
+                " [system_convertlit returned ",$retval,"]");
+            exit(EXIT_HELPERERROR);
+        }
+    }
+    else
+    {
+        say {*STDERR} "Cannot downconvert format '",$unpacker->format,"'";
+        exit(EXIT_BADINPUT);
+    }
+    exit(EXIT_SUCCESS);
 }
 
 
@@ -388,11 +752,11 @@ sub fix
     {
         $ebook->print_errors;
         print "Unrecoverable errors while fixing '",$opffile,"'!\n";
-        exit(11);
+        exit(EXIT_TOOLSERROR);
     }
     
     $ebook->print_warnings if($ebook->warnings);
-    exit(0);
+    exit(EXIT_SUCCESS);
 }
 
 
@@ -403,6 +767,10 @@ Generate a .epub book from existing OPF data.
 =head3 Options
 
 =over
+
+=item C<--inputfile filename.opf>
+
+=item C<--infile filename.opf>
 
 =item C<--opffile filename.opf>
 
@@ -446,8 +814,9 @@ sub genepub
     my ($opffile) = @_;
     my $ebook;
     
+    $opffile = $opt{inputfile} if(!$opffile);
     $opffile = $opt{opffile} if(!$opffile);
-
+    
     if($opffile) { $ebook = EBook::Tools->new($opffile); }
     else {$ebook = EBook::Tools->new(); $ebook->init(); }
 
@@ -457,10 +826,114 @@ sub genepub
         print {*STDERR} "Failed to generate .epub file!\n";
         $ebook->print_errors;
         $ebook->print_warnings;
-        exit(12);
+        exit(EXIT_BADOUTPUT);
     }
     $ebook->print_warnings if($ebook->warnings);
-    exit(0);
+    exit(EXIT_SUCCESS);
+}
+
+
+=head2 C<genmobi>
+
+Generate a Mobipocket .mobi/.prc book from OPF, HTML, or ePub input.
+
+=head3 Options
+
+=over
+
+=item C<--inputfile filename>
+
+=item C<--infile filename>
+
+=item C<--opffile filename.opf>
+
+=item C<--opf filename.opf>
+
+Use the specified file for input.  Valid formats are OPF, HTML, and
+ePub.  This can also be specified as the first non-option argument,
+which will override this option if it exists.  If no file is
+specified, an OPF file in the current directory will be searched for.
+
+=item C<--filename bookname.epub>
+
+=item C<--file bookname.epub>
+
+=item C<-f bookname.epub>
+
+Use the specified name for the final output file.  If not specified,
+the book will have the same filename as the input file, with the
+extension changed to C<.mobi> (this file is always created by
+C<mobigen>, specifying a different filename only causes it to be
+renamed afterwards).
+
+This can also be specified as the second non-option argument, which
+will override this option if it exists.
+
+=item C<--dir directory>
+
+=item C<-d directory>
+
+Output the final book into the specified directory.  The default is to
+use the current working directory, which is where C<mobigen> will
+always place it initially; if specified this only forces the file to
+be moved after generation.
+
+=item C<--compression x>
+
+=item C<-c x>
+
+Use the specified compression level C<x>, where 0 is no compression, 1
+is PalmDoc compression, and 2 is HUFF/CDIC compression.  If not
+specified, defaults to 1 (PalmDoc compression).
+
+=back
+
+=head3 Example
+
+ ebook genmobi mybook.opf -f my_special_book.prc -d ../mobibooks
+ ebook genmobi mybook.html mybook.prc -c2
+
+or in the simplest case:
+
+ ebook genmobi
+
+=cut
+
+sub genmobi
+{
+    my ($infile,$outfile) = @_;
+    my $ebook;
+    my $retval;
+
+    $infile = $opt{inputfile} if(!$infile);
+    $infile = $opt{opffile} if(!$infile);
+    $infile = find_opffile() if(!$infile);
+
+    if(!$infile)
+    {
+        say {*STDERR} "No input file specified or detected!";
+        exit(EXIT_BADOPTION);
+    }
+
+    $outfile = $opt{filename} if(!$outfile);
+
+    if(!find_mobigen())
+    {
+        say {*STDERR} "No mobigen executable available!";
+        exit(EXIT_MISSINGHELPER);
+    }
+
+    $retval = system_mobigen(infile => $infile,
+                             outfile => $outfile,
+                             dir => $opt{dir},
+                             compression => $opt{compression});
+
+    if($retval)
+    {
+        say {*STDERR} "Error during generation: ",$retval;
+        exit(EXIT_HELPERERROR);
+    }
+    exit(EXIT_SUCCESS);
 }
 
 
@@ -519,12 +992,13 @@ sub setmeta
     {
         print "You must specify which element to set.\n";
         print "Example: ebook setmeta title 'My Great Title'\n";
-        exit(21);
+        exit(EXIT_BADOPTION);
     }
     unless($value)
     {
         print "You muts specify the value to set.\n";
         print "Example: ebook setmeta title 'My Great Title'\n";
+        exit(EXIT_BADOPTION);
     }
 
     my $opffile = $opt{opffile};
@@ -558,7 +1032,7 @@ sub setmeta
     $ebook->save;
     $ebook->print_errors;
     $ebook->print_warnings;
-    exit(0);
+    exit(EXIT_SUCCESS);
 }
 
 
@@ -582,7 +1056,7 @@ sub splitmeta
     if(!$opffile)
     {
         print {*STDERR} "No metadata block was found in '",$infile,"'\n";
-        exit(20);
+        exit(EXIT_BADINPUT);
     }
 
     $ebook = EBook::Tools->new($opffile);
@@ -600,10 +1074,10 @@ sub splitmeta
     {
         $ebook->print_errors;
         $ebook->print_warnings if($ebook->warnings);
-        exit(21);
+        exit(EXIT_TOOLSERROR);
     }
     $ebook->print_warnings if($ebook->warnings);
-    exit(0);
+    exit(EXIT_SUCCESS);
 }
 
 
@@ -621,9 +1095,13 @@ files.
 sub splitpre
 {
     my ($infile,$outfilebase) = @_;
-    if(!$infile) { die("You must specify a file to parse.\n"); }
+    if(!$infile)
+    { 
+        say {*STDERR} "You must specify a file to parse.";
+        exit(EXIT_BADOPTION);
+    }
     split_pre($infile,$outfilebase);
-    exit(0);
+    exit(EXIT_SUCCESS);
 }
 
 
@@ -654,7 +1132,7 @@ sub stripscript
     if(!$infile)
     {
         print "You must specify an input file.\n";
-        exit(10);
+        exit(EXIT_BADOPTION);
     }
     my %args;
     $args{infile} = $infile;
@@ -662,7 +1140,7 @@ sub stripscript
     $args{noscript} = $opt{noscript};
 
     strip_script(%args);
-    exit(0);
+    exit(EXIT_SUCCESS);
 }
 
 =head2 C<tidyxhtml>
@@ -680,7 +1158,7 @@ sub tidyxhtml
     if(!$inputfile)
     {
         print "You must specify an input file to tidy.\n";
-        exit(10);
+        exit(EXIT_BADOPTION);
     }
 
     if($tidyfile) { $retval = system_tidy_xhtml($inputfile,$tidyfile); }
@@ -703,7 +1181,7 @@ sub tidyxml
     if(!$inputfile)
     {
         print "You must specify an input file to tidy.\n";
-        exit(10);
+        exit(EXIT_BADOPTION);
     }
 
     if($tidyfile) { $retval = system_tidy_xml($inputfile,$tidyfile); }
@@ -841,13 +1319,19 @@ sub unpack
     unless($filename)
     {
         print {*STDERR} "You must specify a file to unpack!\n";
-        exit(20);
+        exit(EXIT_BADOPTION);
     }
 
     unless(-f $filename)
     {
         print {*STDERR} "Could not find '",$filename,"' to unpack!\n";
-        exit(21);
+        exit(EXIT_BADINPUT);
+    }
+
+    if( $opt{key} && ! pid_is_valid($opt{key}) )
+    {
+        print {*STDERR} "Invalid PID '",$opt{key},"'\n";
+        exit(EXIT_BADOPTION);
     }
 
     my $unpacker = EBook::Tools::Unpack->new(
@@ -865,12 +1349,12 @@ sub unpack
 
     $unpacker->unpack;
 
-    exit(0);
+    exit(EXIT_SUCCESS);
 }
 
 ########## PRIVATE PROCEDURES ##########
 
-sub useoptdir ()
+sub useoptdir
 {
     if($opt{dir})
     {
@@ -914,7 +1398,9 @@ sub useoptdir ()
 another.  This will wait until more formats are supported by the
 underlying modules, however.
 
-=item * documentation is incomplete
+=item * Documentation is incomplete
+
+=item * Not all configuration file options are actually used
 
 =back
 
@@ -932,3 +1418,56 @@ Licensed to the public under the terms of the GNU GPL, version 2.
 ########## DATA ##########
 
 __DATA__
+#
+# config.ini
+#
+# Configuration file for EBook-Tools
+#
+#
+
+# The [config] section holds general configuration values for
+# EBook::Tools.
+[config]
+#
+# debug sets the default debugging level if no verbosity is specified
+# Note that this can only be raised, not lowered, from the command line.
+debug=0
+#
+# tidysafety sets the safety level when running system_tidy_xhtml or
+# system_tidy_xml.  See the EBook::Tools documentation for possible
+# values and what they mean.
+tidysafety=1
+
+# The [drm] section holds user-specific information needed to decrypt,
+# encrypt, or inscribe protected e-books.  Additional plug-in modules
+# or helper applications may be needed for some of these values to
+# have any effect.
+[drm]
+#
+# ereaderkeys is a comma-separated list of EReader decryption keys to
+# try, in the order that they will be tried.
+ereaderkeys=
+#
+# litkeyfile marks the full path and filename to the keys.txt file
+# needed by convertlit to downconvert or unpack MS Reader files.  If
+# not specified, a keys.txt file will be searched for in the
+# configuration directory and the current working directory.
+litkeyfile=
+#
+# mobpids is a comma-separated list of Mobipocket/Kindle PIDs to try,
+# in the order that they will be tried.
+mobipids=
+#
+# username is the full name that will be used when decrypting EReader
+# books and when inscribing MS Reader .lit files
+username=
+
+# The [helpers] section holds the locations of helper files, including
+# the complete path.  If not specified here, they will be searched
+# for in the configuration directory and other likely locations.
+[helpers]
+convertlit=
+mobidedrm=
+mobigen=
+pdbshred=
+tidy=

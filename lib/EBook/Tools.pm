@@ -1,11 +1,10 @@
 package EBook::Tools;
 use warnings; use strict; use utf8;
 use 5.010; # Needed for smart-match operator
-require Exporter;
-use base qw(Exporter);
-use version; our $VERSION = qv("0.2.0");
-# $Revision: 132 $ $Date: 2008-11-01 15:28:12 -0400 (Sat, 01 Nov 2008) $
-# $Id: Tools.pm 132 2008-11-01 19:28:12Z zed $
+use English qw( -no_match_vars );
+use version; our $VERSION = qv("0.3.0");
+# $Revision: 181 $ $Date: 2008-11-15 12:34:52 -0500 (Sat, 15 Nov 2008) $
+# $Id: Tools.pm 181 2008-11-15 17:34:52Z zed $
 
 #use warnings::unused;
 
@@ -98,6 +97,37 @@ L</system_tidy_xhtml()> will be nonfunctional.
 =cut
 
 
+require Exporter;
+use base qw(Exporter);
+
+our @EXPORT_OK;
+@EXPORT_OK = qw (
+    &create_epub_container
+    &create_epub_mimetype
+    &debug
+    &excerpt_line
+    &fix_datestring
+    &find_in_path
+    &find_links
+    &find_opffile
+    &hexstring
+    &get_container_rootfile
+    &print_memory
+    &split_metadata
+    &split_pre
+    &strip_script
+    &system_tidy_xml
+    &system_tidy_xhtml
+    &trim
+    &twigelt_create_uuid
+    &twigelt_fix_oeb12_atts
+    &twigelt_fix_opf20_atts
+    &twigelt_is_author
+    &userconfigdir
+    &ymd_validate
+    );
+our %EXPORT_TAGS = ('all' => [@EXPORT_OK]);
+
 # OSSP::UUID will provide Data::UUID on systems such as Debian that do
 # not distribute the original Data::UUID.
 use Data::UUID;
@@ -122,30 +152,6 @@ use Tie::IxHash;
 use Time::Local;
 use XML::Twig;
 use Palm::Doc();
-
-our @EXPORT_OK;
-@EXPORT_OK = qw (
-    &create_epub_container
-    &create_epub_mimetype
-    &debug
-    &fix_datestring
-    &find_links
-    &hexstring
-    &get_container_rootfile
-    &print_memory
-    &split_metadata
-    &split_pre
-    &strip_script
-    &system_tidy_xml
-    &system_tidy_xhtml
-    &trim
-    &twigelt_create_uuid
-    &twigelt_fix_oeb12_atts
-    &twigelt_fix_opf20_atts
-    &twigelt_is_author
-    &ymd_validate
-    );
-
 
 =head1 CONFIGURABLE PACKAGE VARIABLES
 
@@ -606,36 +612,31 @@ sub init :method    ## no critic (Always unpack @_ first)
     croak($subname . "() called as a procedure") unless(ref $self);
     debug(2,"DEBUG[",$subname,"]");
 
-    if($filename) { $$self{opffile} = $filename; }
+    if($filename) { $self->{opffile} = $filename; }
 
-    if(!$$self{opffile})
-    { 
-        $opfstring = get_container_rootfile();
-        $self->set_opffile($opfstring) if($opfstring);
+    if(!$self->{opffile})
+    {
+        $opfstring = find_opffile();
+        $self->{opffile} = $opfstring if($opfstring);
+    }
+
+    if(!$self->{opffile})
+    {
+	croak($subname,"(): Unable to find an OPF file to work with!\n");
     }
     
-    if(!$$self{opffile})
+    if(! -f $self->{opffile})
     {
-	my @candidates = glob("*.opf");
-	croak("No OPF file specified, and there are multiple files to choose from")
-	    if(scalar(@candidates) > 1);
-	croak("No OPF file specified, and I couldn't find one nearby")
-	    if(scalar(@candidates) < 1);
-	$$self{opffile} = $candidates[0];
-    }
-    
-    if(! -f $$self{opffile})
-    {
-	croak($subname,"(): '",$$self{opffile},
+	croak($subname,"(): '",$self->{opffile},
               "' does not exist or is not a regular file!")
     }
 
-    if(-z $$self{opffile})
+    if(-z $self->{opffile})
     {
-	croak("OPF file '",$$self{opffile},"' has zero size!");
+	croak("OPF file '",$self->{opffile},"' has zero size!");
     }
 
-    debug(2,"DEBUG: init using '",$$self{opffile},"'");
+    debug(2,"DEBUG: init using '",$self->{opffile},"'");
 
     # Initialize the twig before use
     $$self{twig} = XML::Twig->new(
@@ -645,12 +646,13 @@ sub init :method    ## no critic (Always unpack @_ first)
 	);
 
     # Read and decode entities before parsing to avoid parsing errors
-    open($fh_opffile,'<:utf8',$self->opffile)
-        or croak($subname,"(): failed to open '",$self->opffile,"' for reading!");
+    open($fh_opffile,'<:utf8',$self->{opffile})
+        or croak($subname,"(): failed to open '",$self->{opffile},
+                 "' for reading!");
     read($fh_opffile,$opfstring,-s $self->opffile)
-        or croak($subname,"(): failed to read from '",$self->opffile,"'!");
+        or croak($subname,"(): failed to read from '",$self->{opffile},"'!");
     close($fh_opffile)
-        or croak($subname,"(): failed to close '",$self->opffile,"'!");
+        or croak($subname,"(): failed to close '",$self->{opffile},"'!");
 
     # We use _decode_entities and the custom hash to decode, but also
     # see below for the regexp
@@ -3012,24 +3014,45 @@ sub fix_guide :method
 }
 
 
-=head2 C<fix_languages()>
+=head2 C<fix_languages(%args)>
 
 Checks through the <dc:language> elements (case-insensitive) and
-removes any duplicates.
+removes any duplicates.  If no <dc:language> elements are found, one
+is created.
 
 TODO: Also convert language names to IANA language and region codes.
+
+=head3 Arguments
+
+=over
+
+=item * C<default>
+
+The default language string to use when creating a new language
+element.  If not specified, defaults to 'en'.
 
 =cut
 
 sub fix_languages :method
 {
     my $self = shift;
+    my %args = @_;
     my $subname = ( caller(0) )[3];
     croak($subname . "() called as a procedure") unless(ref $self);
     debug(2,"DEBUG[",$subname,"]");
     $self->twigcheck();
 
+    my %valid_args = (
+        'default' => 1,
+        );
+    foreach my $arg (keys %args)
+    {
+        croak($subname,"(): invalid argument '",$arg,"'")
+            if(!$valid_args{$arg});
+    }
+
     my $twigroot = $$self{twigroot};
+    my $defaultlang = $args{default} || 'en';
     my $langel;
     my @elements = $twigroot->descendants(qr/dc:language/ix);
     while($langel = shift(@elements) )
@@ -3038,6 +3061,12 @@ sub fix_languages :method
         {
             $el->delete if(twigelt_detect_duplicate($el,$langel) );
         }
+    }
+
+    @elements = $self->languages;
+    if(!@elements)
+    {
+        $self->set_language(text => $defaultlang);
     }
     return 1;
 }
@@ -5677,7 +5706,8 @@ sub set_type :method    ## no critic (Always unpack @_ first)
 
 =head1 PROCEDURES
 
-All procedures are exportable, but none are exported by default.
+All procedures are exportable, but none are exported by default.  All
+procedures can be exported by using the ":all" tag.
 
 
 =head2 C<create_epub_container($opffile)>
@@ -5822,36 +5852,80 @@ sub debug
 }
 
 
-=head2 hexstring($bindata)
+=head2 C<excerpt_line($text)>
 
-Takes as an argument a scalar containing a sequence of binary bytes.
-Returns a string converting each octet of the data to its two-digit
-hexadecimal equivalent.  There is no leading "0x" on the string.
+Takes as an argument a list of text pieces that will be joined.  If
+the joined length is less than 70, all of the joined text is returned.
+
+If the joined length is greater than 70, the return string is the
+first 30 characters followed by C<' [...] '> followed by the last 30
+characters.
 
 =cut
 
-sub hexstring
+sub excerpt_line
 {
-    my $data = shift;
+    my @parts = @_;
+    my $subname = ( caller(0) )[3];
+    my $text = join('',@parts);
+    if(length($text) > 70)
+    {
+        $text =~ /^ (.{30}) .*? (.{30}) $/x;
+        return ($1 . ' [...] ' . $2);
+    }
+    else { return $text; }
+}
+
+
+=head2 C<find_in_path($pattern,@extradirs)>
+
+Searches through C<$ENV{PATH}> (and optionally any additional
+directories specified in C<@extradirs>) for the first regular file
+matching C<$pattern>.  C<$pattern> itself can take two forms: if
+passed a C<qr//> regular expression, that expression is used directly.
+If passed any other string, that string will be used for a
+case-insensitive exact match (i.e. the final pattern will be
+C<qr/^ $pattern $/ix>).
+
+Returns the first match found, or undef if there were no matches or if
+no pattern was specified.
+
+=cut
+
+sub find_in_path
+{
+    my ($pattern,@extradirs) = @_;
+    return unless($pattern);
     my $subname = ( caller(0) )[3];
     debug(3,"DEBUG[",$subname,"]");
 
-    croak($subname,"(): no data provided")
-        unless($data);
+    my $regexp;
+    my @dirs;
+    my $fh_dir;
+    my @patternmatches;
+    my @filelist;
 
-    my $byte;
-    my $retval = '';
-    my $pos = 0;
-
-    while($pos < length($data))
+    if(ref($pattern) eq 'Regexp') { $regexp = $pattern; }
+    else { $regexp = qr/^ $pattern $/ix; }
+    
+    @dirs = split(/[:;]/,$ENV{PATH});
+    unshift(@dirs,@extradirs) if(@extradirs);
+    foreach my $dir (@dirs)
     {
-        $byte = unpack("C",substr($data,$pos,1));
-        $retval .= sprintf("%02x",$byte);
-        $pos++;
-    }
-    return $retval;
-}
+        if(-d $dir)
+        {
+            if(opendir($fh_dir,$dir))
+            {
+                @patternmatches = grep { /$regexp/ } readdir($fh_dir);
+                @filelist = grep { -f "$dir/$_" } @patternmatches;
+                closedir($fh_dir);
 
+                if(@filelist) { return $dir . '/' . $filelist[0]; }
+            }
+        }
+    }
+    return;
+}
 
 =head2 C<find_links($filename)>
 
@@ -5888,7 +5962,7 @@ sub find_links
     my %linkhash;
     my @links;
 
-    open($fh,'<:utf8',$filename)
+    open($fh,'<:raw',$filename)
         or croak($subname,"(): unable to open '",$filename,"'\n");
     
     while(<$fh>)
@@ -5906,6 +5980,42 @@ sub find_links
     }
     if(%linkhash) { return keys(%linkhash); }
     else { return; }
+}
+
+
+=head2 C<find_opffile()>
+
+Attempts to locate an OPF file, first by calling
+L</get_container_rootfile()> to check the contents of
+C<META-INF/container.xml>, and then by looking for a single file with
+the extension C<.opf> in the current working directory.
+
+Returns the filename of the OPF file, or undef if nothing was found.
+
+=cut
+
+sub find_opffile
+{
+    my $subname = ( caller(0) )[3];
+    my $opffile = get_container_rootfile();
+
+    if(!$opffile)
+    {
+	my @candidates = glob("*.opf");
+        if(scalar(@candidates) > 1)
+        {
+            debug(1,"DEBUG: Multiple OPF files found, but no container",
+                  " to specify which one to choose!");
+            return;
+        }
+        if(scalar(@candidates) < 1)
+        {
+            debug(1,"DEBUG: No OPF files found!");
+            return;
+        }
+        $opffile = $candidates[0];
+    }
+    return $opffile;
 }
 
 
@@ -6117,6 +6227,37 @@ sub get_container_rootfile
 	$rootfile = $twig->root->first_descendant('rootfile');
 	return unless($rootfile);
 	$retval = $rootfile->att('full-path');
+    }
+    return $retval;
+}
+
+
+=head2 C<hexstring($bindata)>
+
+Takes as an argument a scalar containing a sequence of binary bytes.
+Returns a string converting each octet of the data to its two-digit
+hexadecimal equivalent.  There is no leading "0x" on the string.
+
+=cut
+
+sub hexstring
+{
+    my $data = shift;
+    my $subname = ( caller(0) )[3];
+    debug(4,"DEBUG[",$subname,"]");
+
+    croak($subname,"(): no data provided")
+        unless($data);
+
+    my $byte;
+    my $retval = '';
+    my $pos = 0;
+
+    while($pos < length($data))
+    {
+        $byte = unpack("C",substr($data,$pos,1));
+        $retval .= sprintf("%02x",$byte);
+        $pos++;
     }
     return $retval;
 }
@@ -7028,6 +7169,50 @@ sub twigelt_is_isbn
 }
 
 
+=head2 C<userconfigdir()>
+
+Returns the directory in which user configuration files and helper
+programs are expected to be found, creating that directory if it does
+not exist.  Typically, this directory is C<"$ENV{HOME}/.ebooktools">,
+but on MSWin32 systems if that directory does not already exist,
+C<"$ENV{USERPROFILE}/Application Data/EBook-Tools"> is returned (and
+potentially created) instead.
+
+If C<$ENV{HOME}> (and C<$ENV{USERPROFILE} on MSWin32) are not set, the
+sub returns undef.
+
+=cut
+
+sub userconfigdir
+{
+    my $subname = ( caller(0) )[3];
+    debug(3,"DEBUG[",$subname,"]");
+
+    my $dir;
+    $dir = $ENV{HOME} . '/.ebooktools' if($ENV{HOME});
+    if($OSNAME eq 'MSWin32')
+    {
+        if(! -d $dir)
+        {
+            $dir = $ENV{USERPROFILE} . '\Application Data\EBook-Tools'
+                if($ENV{USERPROFILE});
+        }
+    }
+    if($dir)
+    { 
+        if(! -d $dir)
+        {
+            mkpath($dir)
+                or croak($subname,
+                         "(): unable to create configuration directory '",
+                         $dir,"'!\n");
+        }
+        return $dir;
+    }
+    else { return; }
+}
+
+
 =head2 C<ymd_validate($year,$month,$day)>
 
 Make sure month and day have valid values.  Return the passed values
@@ -7070,10 +7255,16 @@ sub ymd_validate
 
 =over
 
+=item * need to implement fix_primary_author() to convert names to
+standard 'last, first' naming format
+
 =item * fix_links() could be improved to download remote URIs instead
 of ignoring them.
 
 =item * fix_links() needs to check the <reference> links under <guide>
+
+=item * fix_links() needs to be redone with HTML::TreeBuilder to avoid
+the weakness with newlines between attribute names and values
 
 =item * Need to implement fix_tours() that should collect the related
 elements and delete the parent if none are found.  Empty <tours>

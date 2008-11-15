@@ -1,11 +1,10 @@
 package EBook::Tools::Unpack;
 use warnings; use strict; use utf8;
 use 5.010; # Needed for smart-match operator
-require Exporter;
-use base qw(Exporter);
-use version; our $VERSION = qv("0.2.0");
-# $Revision: 132 $ $Date: 2008-11-01 15:28:12 -0400 (Sat, 01 Nov 2008) $
-# $Id: Unpack.pm 132 2008-11-01 19:28:12Z zed $
+use English qw( -no_match_vars );
+use version; our $VERSION = qv("0.3.0");
+# $Revision: 181 $ $Date: 2008-11-15 12:34:52 -0500 (Sat, 15 Nov 2008) $
+# $Id: Unpack.pm 181 2008-11-15 17:34:52Z zed $
 
 # Perl Critic overrides:
 ## no critic (Package variable)
@@ -18,8 +17,7 @@ use version; our $VERSION = qv("0.2.0");
 
 =head1 NAME
 
-EBook::Tools::Unpack - An object class for unpacking E-book files into
-their component parts and metadata
+EBook::Tools::Unpack - An object class for unpacking e-book files into their component parts and metadata
 
 =head1 SYNOPSIS
 
@@ -46,11 +44,18 @@ or, more simply:
 
 =cut
 
+require Exporter;
+use base qw(Exporter);
+
+our @EXPORT_OK;
+@EXPORT_OK = qw (
+    );
 
 use Carp;
-use EBook::Tools qw(debug hexstring split_metadata system_tidy_xhtml);
-use EBook::Tools::EReader qw(cp1252_to_pml pml_to_html);
-use EBook::Tools::Mobipocket;
+use EBook::Tools qw(:all);
+use EBook::Tools::EReader qw(:all);
+use EBook::Tools::Mobipocket qw(:all);
+use EBook::Tools::MSReader qw(:all);
 use EBook::Tools::PalmDoc qw(uncompress_palmdoc);
 use Encode;
 use Fcntl qw(SEEK_CUR SEEK_SET);
@@ -66,10 +71,6 @@ eval
 }; # Trailing semicolon is required here
 unless($@){ $drmsupport = 1; }
 
-
-our @EXPORT_OK;
-@EXPORT_OK = qw (
-    );
 
 our %palmdbcodes = (
     '.pdfADBE' => 'adobereader',
@@ -111,11 +112,10 @@ our %pdbcompression = (
 our %unpack_dispatch = (
     'ereader'    => \&unpack_ereader,
     'mobipocket' => \&unpack_mobi,
+    'msreader'   => \&unpack_msreader,
     'palmdoc'    => \&unpack_palmdoc,
     'aportisdoc' => \&unpack_palmdoc,
     );
-
-my %record_links;
 
 
 #################################
@@ -406,11 +406,17 @@ sub detected :method
 
 =head2 C<detect_format()>
 
-Attempts to automatically detect the format of the input file.  Croaks
-if it can't.  This both sets the object internal values and returns a
-two-scalar list, where the first scalar is the detected format and the
-second is a string that may contain additional detected information
-(such as a title or version).
+Attempts to automatically detect the format of the input file and set
+the internal object attributes C<$self->{format}> and
+C<$self->{formatinfo}>, where the former is a one-word string used by
+the dispatcher to select the correct unpacking method and the latter
+may contain additional detected information (such as a title or
+version).
+
+Croaks if detection fails.
+
+In scalar context, returns C<$self->{format}>.  In list context,
+returns the two element list C<($self->{format},$self->{formatinfo}>
 
 This is automatically called by L</new()> if the C<format> argument is
 not specified.
@@ -423,24 +429,25 @@ sub detect_format :method
     my $subname = ( caller(0) )[3];
     my $filename = $$self{file};
     my $fh;
+    my $headerdata;
     my $ident;
     my $info;
     my $index;
     debug(2,"DEBUG[",$subname,"]");
 
     open($fh,"<",$filename)
-        or croak($subname,"(): failed to open '",$filename,"' for reading");
- 
-    # Check for PalmDB identifiers
-    sysseek($fh,60,SEEK_SET);
-    sysread($fh,$ident,8);
+        or croak($subname,"(): failed to open '",$filename,"' for reading!\n");
+    sysread($fh,$headerdata,68);
+    close($fh)
+        or croak($subname,"(): failed to close '",$filename,"'!\n");
 
-    debug(3,"DEBUG: $ident");
+    # Check for PalmDB identifiers
+    $ident = substr($headerdata,60,8);
+    debug(3,"DEBUG: PalmDB ident = '$ident'");
     if($palmdbcodes{$ident})
     {
         $$self{format} = $palmdbcodes{$ident};
-        sysseek($fh,0,SEEK_SET);
-        read($fh,$info,32);
+        $info = substr($headerdata,0,32);
         $index = index($info,"\0");
         if($index < 0)
         {
@@ -457,9 +464,44 @@ sub detect_format :method
         # The info here is always the title, but there may be better
         # ways of extracting it later.
         $$self{detected}{title} = $info;
-        return ($ident,$info)
     }
-    croak($subname,"(): unable to determine book format");
+
+    # Check for Microsoft Reader
+    $ident = substr($headerdata,0,8);
+    if($ident eq 'ITOLITLS')
+    {
+        $$self{format} = 'msreader';
+        $$self{formatinfo} = unpack("c",substr($headerdata,8,1));
+        debug(1,"DEBUG: Autodetected book format '",$$self{format},
+              "', version ",$$self{formatinfo});
+    }
+    
+    # Check for ePub
+    $ident = substr($headerdata,30,28);
+    $info = substr($headerdata,0,2);
+    if($ident eq 'mimetypeapplication/epub+zip'
+       && $info eq 'PK')
+    {
+        $$self{format} = 'epub';
+        $$self{formatinfo} = '';
+        debug(1,"DEBUG: autodetected book format '",$$self{format},"'");
+    }
+
+    # Check for miscellaneous zip archive (OEBZip?)
+    $ident = substr($headerdata,0,4);
+    if($ident eq "PK\x{03}\x{04}")
+    {
+        $$self{format} = 'ziparchive';
+        $$self{formatinfo} = unpack('c',substr($headerdata,4,1)) / 10;
+        debug(1,"DEBUG: autodetected book format '",$$self{format},
+              "', version ",$$self{formatinfo});
+    }
+
+    croak($subname,"(): unable to determine book format")
+        unless($$self{format});
+
+    if(wantarray) { return ($$self{format},$$self{formatinfo}); }
+    else { return $$self{format}; }
 }
 
 
@@ -574,7 +616,10 @@ sub gen_opf :method   ## no critic (Always unpack @_ first)
     my $ebook = EBook::Tools->new();
     my $textfile = $args{textfile};
     my $opffile = $args{htmlfile} || $$self{opffile};
-    $opffile = split_metadata($textfile,$opffile) if($textfile);
+    unless($self->{raw})
+    {
+        $opffile = split_metadata($textfile,$opffile) if($textfile);
+    }
     my $detected;
     my $code;
     my $index;
@@ -783,11 +828,11 @@ sub unpack_ereader :method
         
         if($$self{htmlconvert})
         {
-            $pdb->write_html();
+            $textname = $pdb->write_html();
         }
         else
         {
-            $pdb->write_pml();
+            $textname = $pdb->write_pml();
         }
         $pdb->write_images;
         $pdb->write_unknown_records if($$self{raw});
@@ -871,7 +916,29 @@ sub unpack_mobi :method
 }
 
 
-=head2 unpack_palmdoc()
+=head2 C<unpack_msreader()>
+
+Unpacks Microsoft Reader (.lit) files
+
+=cut
+
+sub unpack_msreader :method
+{
+    my $self = shift;
+    my $subname = ( caller(0) )[3];
+    debug(2,"DEBUG[",$subname,"]");
+
+    my $convertlit = find_convertlit();
+    my $keys = find_convertlit_keys($$self{file});
+
+    my $retval = system_convertlit(infile => $$self{file},
+                                   keyfile => $keys,
+                                   dir => $$self{dir});
+    return $retval;
+}
+
+
+=head2 C<unpack_palmdoc()>
 
 Unpacks PalmDoc / AportisDoc (.pdb) files
 

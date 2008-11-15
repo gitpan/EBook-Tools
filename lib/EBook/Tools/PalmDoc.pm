@@ -1,8 +1,8 @@
 package EBook::Tools::PalmDoc;
 use warnings; use strict; use utf8;
-use version; our $VERSION = qv("0.2.0");
-# $Revision: 132 $ $Date: 2008-11-01 15:28:12 -0400 (Sat, 01 Nov 2008) $
-# $Id: PalmDoc.pm 132 2008-11-01 19:28:12Z zed $
+use version; our $VERSION = qv("0.3.0");
+# $Revision: 181 $ $Date: 2008-11-15 12:34:52 -0500 (Sat, 15 Nov 2008) $
+# $Id: PalmDoc.pm 181 2008-11-15 17:34:52Z zed $
 
 # Mixed case subs and the variable %record are inherited from Palm::PDB
 ## no critic (ProhibitAmbiguousNames)
@@ -10,24 +10,23 @@ use version; our $VERSION = qv("0.2.0");
 
 =head1 NAME
 
-EBook::Tools::PalmDoc - Components related to the
-PalmDoc/PilotDoc/AportisDoc format
+EBook::Tools::PalmDoc - Components related to the PalmDoc/PilotDoc/AportisDoc format
 
 =head1 SYNOPSIS
 
  use EBook::Tools::PalmDoc qw(uncompress_palmdoc);
  use Palm::PDB;
-
+ 
  my $pdb = Palm::PDB->new();
 
 or 
 
- use EBook::Tools::PalmDoc;
+ use EBook::Tools::PalmDoc qw(:all);
 
  my $pdb = EBook::Tools::PalmDoc->new();
  $pdb->set_text($text);
  $pdb->Write('textfile.pdb');
-
+ 
  my $pdb2 = EBook::Tools::PalmDoc->new();
  $pdb2->{attributes}{resource} = 1;
  $pdb->import_textfile('textfile.txt');
@@ -52,6 +51,7 @@ our @EXPORT_OK;
     &parse_palmdoc_header
     &uncompress_palmdoc
     );
+our %EXPORT_TAGS = ('all' => [@EXPORT_OK]);
 
 sub import   ## no critic (Always unpack @_ first)
 {
@@ -64,9 +64,16 @@ sub import   ## no critic (Always unpack @_ first)
 use Carp;
 use EBook::Tools qw(debug);
 use File::Basename qw(fileparse);
-use HTML::TextToHTML;
 use Palm::PDB;
 use Palm::Raw();
+
+my $htmlsupport = 0;
+eval
+{
+    require HTML::TextToHTML;
+    EBook::Tools::DRM->import();
+}; # Trailing semicolon is required here
+unless($@){ $htmlsupport = 1; }
 
 
 #################################
@@ -177,6 +184,9 @@ sub html :method
     my $subname = ( caller(0) )[3];
     debug(2,"DEBUG[",$subname,"]");
 
+    croak("HTML support requires that HTML::TextToHTML be installed!\n")
+        unless($htmlsupport);
+
     my $conv = HTML::TextToHTML->new();
     my $header = "<html>\n<head>\n  <title>" . $self->{name} . "</title>\n";
     $header   .= "</head>\n<body>\n";
@@ -184,6 +194,7 @@ sub html :method
 
     return $header . $conv->process_chunk($self->{text}) . $footer;
 }
+
 
 ######################################
 ########## MODIFIER METHODS ##########
@@ -234,7 +245,7 @@ sub ParseRecord :method   ## no critic (Always unpack @_ first)
 }
 
 
-=head2 ParseResource(%resource)
+=head2 C<ParseResource(%resource)>
 
 Parses PDB resources, updating object attributes.  This is called
 automatically on every database resource (in .prc files) during
@@ -459,7 +470,6 @@ sub compress_palmdoc
     debug(3,"DEBUG[",$subname,"]");
 
     my $textlength = length($text);
-    my $data = '';
     my $compressed = '';
 
     debug(1,"WARNING: input text is longer than 4096 bytes (",$textlength,
@@ -588,11 +598,10 @@ Possible values:
 
 =item 2 - PalmDoc compression
 
-=item ?? - HuffDic?
-
 =item 128 - iSilo3?
 
-=item 17480 - Mobipocket DRM?
+=item 17480 (the characters 'DH') - Mobipocket 'Dictionary Huffman'
+compression (aka HuffDic aka Huff/CDIC)
 
 =back
 
@@ -638,7 +647,7 @@ sub parse_palmdoc_header
         1 => 'no compression',
         2 => 'PalmDoc compression',
         128 => 'iSilo3 compression',
-        17480 => 'Mobipocket DRM',
+        17480 => 'Dictionary Huffman compression',
         );
 
     # We're expecting 16 bytes of data exactly.  We won't croak on
@@ -654,12 +663,12 @@ sub parse_palmdoc_header
     my @compression_keys = keys(%pdbcompression);
     my %header;
 
-    $header{compression} = $list[0];
-    $header{spare}       = $list[1];
-    $header{textlength}  = $list[2];
-    $header{textrecords} = $list[3];
-    $header{recordsize}  = $list[4];
-    $header{unknown12}   = $list[5];
+    $header{compression} = $list[0]; # Bytes 00-01
+    $header{spare}       = $list[1]; # Bytes 01-02
+    $header{textlength}  = $list[2]; # Bytes 03-07
+    $header{textrecords} = $list[3]; # Bytes 08-09
+    $header{recordsize}  = $list[4]; # Bytes 10-11
+    $header{unknown12}   = $list[5]; # Bytes 12-15
 
     carp($subname,"(): value ",$header{spare},
          " found in header 'spare' (expected 0)")
@@ -777,6 +786,11 @@ sub uncompress_palmdoc
             # of such a two-byte sequence."
 
             $offset++;
+            if($offset > length($data))
+            {
+                debug(1,"WARNING: offset to LZ77 bits is outside of the data");
+                return;
+            }
             $lz77 = unpack('n',substr($data,$offset-2,2));
 
             # Leftmost two bits are ID bits and need to be dropped
@@ -787,6 +801,11 @@ sub uncompress_palmdoc
             
             # Remaining 11 bits are offset
             $lz77offset = $lz77 >> 3;
+            if($lz77offset < 1)
+            {
+                debug(1,"WARNING: LZ77 decompression offset is invalid!");
+                return;
+            }
 
             # Getting text from the offset is a little tricky, because
             # in theory you can be referring to characters you haven't
@@ -796,7 +815,7 @@ sub uncompress_palmdoc
             for($lz77pos = 0; $lz77pos < $lz77length; $lz77pos++)
             {
                 $textpos = $textlength - $lz77offset;
-                if($textlength - $lz77offset < 0)
+                if($textpos < 0)
                 {
                     debug(1,"WARNING: LZ77 decompression reference is before",
                           " beginning of text!");

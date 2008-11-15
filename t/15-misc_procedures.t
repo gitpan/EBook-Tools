@@ -1,23 +1,50 @@
 use strict; use warnings;
-use Cwd qw(chdir getcwd);
-use File::Basename qw(basename);
+use Cwd qw(chdir getcwd realpath);
+use File::Basename qw(basename dirname);
 use File::Copy;
-use Test::More tests => 5;
-BEGIN { use_ok('EBook::Tools',
-               qw(print_memory system_tidy_xhtml system_tidy_xml)) };
+use Test::More tests => 11;
+BEGIN
+{
+    use_ok('EBook::Tools',qw(:all));
+};
+
+my $result;
+my $longline = 'We think ourselves possessed, or, at least, we boast that we are so, of liberty of conscience on all subjects, and of the right of free inquiry and private judgment in all cases, and yet how far are we from these exalted privileges in fact! -- John Adams';
+my $hexable = "\x{0}\x{d0}\x{be}\x{d0}\x{be}\x{da}";
+my $scriptname = basename($0);
 
 ########## TESTS BEGIN ##########
 
 ok( (basename(getcwd()) eq 't') || chdir('t/'), "Working in 't/" ) or die;
 
-# Generate fresh input samples
-copy('testopf-emptyuid.xml','emptyuid.opf') or die("Could not copy: $!");
-copy('testopf-missingfwid.xml','missingfwid.opf') or die("Could not copy: $!");
+ok(find_in_path('perl'),'find_in_path("perl") finds perl');
+is(find_in_path($scriptname,dirname(realpath($scriptname))),
+   realpath($scriptname),
+   'find_in_path(script,path) finds test script');
+is(excerpt_line($longline),
+   'We think ourselves possessed,  [...] vileges in fact! -- John Adams',
+   'excerpt_line() excerpts correctly');
 
-is(system_tidy_xml('emptyuid.opf','emptyuid-tidy.opf'),0,
-   'system_tidy_xml: emptyuid.opf');
-is(system_tidy_xml('missingfwid.opf','missingfwid-tidy.opf'),0,
-   'system_tidy_xml: missingfwid.opf');
+# Generate fresh input samples, test finding them
+copy('testopf-emptyuid.xml','emptyuid.opf') or die("Could not copy: $!");
+is(find_opffile(),'emptyuid.opf',
+   'find_opffile() finds a single OPF');
+copy('testopf-missingfwid.xml','missingfwid.opf') or die("Could not copy: $!");
+is(find_opffile(),undef,
+   'find_opffile() returns undef with multiple OPF files');
+
+is(hexstring($hexable),'00d0bed0beda',
+   'hexstring() returns correct string');
+
+# Tidy may not be available to test
+SKIP:
+{
+    skip('Tidy not available',2) unless(-x '/usr/bin/tidy');
+    is(system_tidy_xml('emptyuid.opf','emptyuid-tidy.opf'),0,
+       'system_tidy_xml: emptyuid.opf');
+    is(system_tidy_xml('missingfwid.opf','missingfwid-tidy.opf'),0,
+       'system_tidy_xml: missingfwid.opf');
+}
 
 SKIP: 
 {
