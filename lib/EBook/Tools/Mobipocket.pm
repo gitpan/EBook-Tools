@@ -1,11 +1,11 @@
-﻿package EBook::Tools::Mobipocket;
+package EBook::Tools::Mobipocket;
 use warnings; use strict; use utf8;
 #use warnings::unused;
 use 5.010; # Needed for smart-match operator
 use English qw( -no_match_vars );
-use version; our $VERSION = qv("0.3.0");
-# $Revision: 181 $ $Date: 2008-11-15 12:34:52 -0500 (Sat, 15 Nov 2008) $
-# $Id: Mobipocket.pm 181 2008-11-15 17:34:52Z zed $
+use version; our $VERSION = qv("0.3.1");
+# $Revision: 184 $ $Date: 2008-11-18 09:51:50 -0500 (Tue, 18 Nov 2008) $
+# $Id: Mobipocket.pm 184 2008-11-18 14:51:50Z zed $
 
 # Perl Critic overrides:
 ## no critic (Package variable)
