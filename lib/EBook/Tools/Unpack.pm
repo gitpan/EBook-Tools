@@ -1,10 +1,9 @@
 package EBook::Tools::Unpack;
 use warnings; use strict; use utf8;
-use 5.010; # Needed for smart-match operator
 use English qw( -no_match_vars );
-use version; our $VERSION = qv("0.3.1");
-# $Revision: 184 $ $Date: 2008-11-18 09:51:50 -0500 (Tue, 18 Nov 2008) $
-# $Id: Unpack.pm 184 2008-11-18 14:51:50Z zed $
+use version; our $VERSION = qv("0.3.2");
+# $Revision: 188 $ $Date: 2008-11-19 15:24:06 -0500 (Wed, 19 Nov 2008) $
+# $Id: Unpack.pm 188 2008-11-19 20:24:06Z zed $
 
 # Perl Critic overrides:
 ## no critic (Package variable)

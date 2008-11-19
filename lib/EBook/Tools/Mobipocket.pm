@@ -1,11 +1,12 @@
 package EBook::Tools::Mobipocket;
 use warnings; use strict; use utf8;
 #use warnings::unused;
-use 5.010; # Needed for smart-match operator
+#use 5.010; # Needed for smart-match operator
+#v5.10 feature use removed until 5.10 is standard on MacOSX and Debian
 use English qw( -no_match_vars );
-use version; our $VERSION = qv("0.3.1");
-# $Revision: 184 $ $Date: 2008-11-18 09:51:50 -0500 (Tue, 18 Nov 2008) $
-# $Id: Mobipocket.pm 184 2008-11-18 14:51:50Z zed $
+use version; our $VERSION = qv("0.3.2");
+# $Revision: 188 $ $Date: 2008-11-19 15:24:06 -0500 (Wed, 19 Nov 2008) $
+# $Id: Mobipocket.pm 188 2008-11-19 20:24:06Z zed $
 
 # Perl Critic overrides:
 ## no critic (Package variable)
@@ -1102,16 +1103,23 @@ sub ParseRecordHUFF
     @lebasetable = unpack('V[64]',
                           substr($$dataref,$huff{lebaseoffset},64*4));
 
-    unless(@cache ~~ @lecache)
-    {
-        debug(1,"WARNING: big-endian and little-endian HUFF cache",
-              " tables are different in record ",$currentrecord,"!");
-    }
-    unless(@basetable ~~ @lebasetable)
-    {
-        debug(1,"WARNING: big-endian and little-endian HUFF base",
-              " tables are different in record ",$currentrecord,"!");
-    }
+# Testing to see if the big-endian and little-endian tables are
+# identical is really only efficient with the smart-match operator,
+# which requires Perl 5.10 or later.
+#
+# Use of 5.10 features is being delayed until 5.10 is standard on
+# MacOSX and Debian.
+#
+#    unless(@cache ~~ @lecache)
+#    {
+#        debug(1,"WARNING: big-endian and little-endian HUFF cache",
+#              " tables are different in record ",$currentrecord,"!");
+#    }
+#    unless(@basetable ~~ @lebasetable)
+#    {
+#        debug(1,"WARNING: big-endian and little-endian HUFF base",
+#              " tables are different in record ",$currentrecord,"!");
+#    }
 
 
     if($huff{headerlength} != 24)
@@ -2137,9 +2145,14 @@ sub parse_mobi_header   ## no critic (ProhibitExcessComplexity)
     $header{uniqueid}     = $list[4];
     $header{version}      = $list[5];
 
-    debug(1,"DEBUG: Found encoding ",$pdbencoding{$header{encoding}});
-    carp($subname,"(): unknown encoding '",$header{encoding},"'")
-        unless($header{encoding} ~~ @enckeys);
+    if(!defined $pdbencoding{$header{encoding}})
+    {
+        carp($subname,"(): unknown encoding '",$header{encoding},"'");
+    }
+    else
+    {
+        debug(1,"DEBUG: Found encoding ",$pdbencoding{$header{encoding}});
+    }
 
     # Second chunk is 40 bytes of reserved data, usually all 0xff
     $header{reserved} = substr($headerdata,24,40);

@@ -1,6 +1,6 @@
 ---
 name: EBook-Tools
-version: 0.3.1
+version: 0.3.2
 author:
   - 'Zed Pobre <zed@debian.org>'
 abstract: |-
@@ -28,26 +28,26 @@ requires:
   Tie::IxHash: 1.21
   Time::Local: 1.18
   XML::Twig: 3.32
-  perl: 5.10.0
+  perl: 5.8.8
 provides:
   EBook::Tools:
     file: lib/EBook/Tools.pm
-    version: 0.3.1
+    version: 0.3.2
   EBook::Tools::EReader:
     file: lib/EBook/Tools/EReader.pm
-    version: 0.3.1
+    version: 0.3.2
   EBook::Tools::MSReader:
     file: lib/EBook/Tools/MSReader.pm
-    version: 0.3.1
+    version: 0.3.2
   EBook::Tools::Mobipocket:
     file: lib/EBook/Tools/Mobipocket.pm
-    version: 0.3.1
+    version: 0.3.2
   EBook::Tools::PalmDoc:
     file: lib/EBook/Tools/PalmDoc.pm
-    version: 0.3.1
+    version: 0.3.2
   EBook::Tools::Unpack:
     file: lib/EBook/Tools/Unpack.pm
-    version: 0.3.1
+    version: 0.3.2
 generated_by: Module::Build version 0.3
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.2.html

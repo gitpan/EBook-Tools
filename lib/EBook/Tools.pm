@@ -1,10 +1,11 @@
 package EBook::Tools;
 use warnings; use strict; use utf8;
-use 5.010; # Needed for smart-match operator
+#use 5.010; # Needed for smart-match operator
+#v5.10 feature use removed until 5.10 is standard on MacOSX and Debian
 use English qw( -no_match_vars );
-use version; our $VERSION = qv("0.3.1");
-# $Revision: 184 $ $Date: 2008-11-18 09:51:50 -0500 (Tue, 18 Nov 2008) $
-# $Id: Tools.pm 184 2008-11-18 14:51:50Z zed $
+use version; our $VERSION = qv("0.3.2");
+# $Revision: 188 $ $Date: 2008-11-19 15:24:06 -0500 (Wed, 19 Nov 2008) $
+# $Id: Tools.pm 188 2008-11-19 20:24:06Z zed $
 
 #use warnings::unused;
 
@@ -6959,8 +6960,15 @@ sub twigelt_detect_duplicate
     %atts1 = %{$element1->atts};
     %atts2 = %{$element2->atts};
 
+    my $attkeys1 = join('',sort keys %atts1);
+    my $attkeys2 = join('',sort keys %atts2);
+
+    # This is much simpler with the ~~ operator, but Perl 5.10
+    # features are being avoided until 5.10 is standard both on MacOSX
+    # and Debian
     # Note that the ~~ operator only checks keys of hashes, not values
-    unless(%atts1 ~~ %atts2)
+#    unless(%atts1 ~~ %atts2)
+    unless($attkeys1 eq $attkeys2)
     {
         debug(3,"  elements have different attributes");
         return 0;

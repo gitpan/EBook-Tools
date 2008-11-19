@@ -1,8 +1,8 @@
 package EBook::Tools::PalmDoc;
 use warnings; use strict; use utf8;
-use version; our $VERSION = qv("0.3.1");
-# $Revision: 184 $ $Date: 2008-11-18 09:51:50 -0500 (Tue, 18 Nov 2008) $
-# $Id: PalmDoc.pm 184 2008-11-18 14:51:50Z zed $
+use version; our $VERSION = qv("0.3.2");
+# $Revision: 188 $ $Date: 2008-11-19 15:24:06 -0500 (Wed, 19 Nov 2008) $
+# $Id: PalmDoc.pm 188 2008-11-19 20:24:06Z zed $
 
 # Mixed case subs and the variable %record are inherited from Palm::PDB
 ## no critic (ProhibitAmbiguousNames)
@@ -660,7 +660,6 @@ sub parse_palmdoc_header
         if(length($data) != 16);
 
     my @list = unpack("nnNnnN",$data);
-    my @compression_keys = keys(%pdbcompression);
     my %header;
 
     $header{compression} = $list[0]; # Bytes 00-01
@@ -675,9 +674,10 @@ sub parse_palmdoc_header
         unless($header{spare} == 0);
     carp($subname,"(): found text record size ",$header{recordsize},
          ", expected 2048 or 4096")
-        unless($header{recordsize} ~~ [2048,4096]);
+        unless($header{recordsize} == 2048
+               or $header{recordsize} == 4096);
     carp($subname,"(): found unknown compression value ",$header{compression})
-        unless($header{compression} ~~ @compression_keys);
+        unless(defined $pdbcompression{$header{compression}});
     debug(1,"DEBUG: PDB compression type is ",
           $pdbcompression{$header{compression}});
 

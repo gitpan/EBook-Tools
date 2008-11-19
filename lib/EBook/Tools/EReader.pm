@@ -1,9 +1,8 @@
 package EBook::Tools::EReader;
 use warnings; use strict; use utf8;
-use 5.010; # Needed for smart-match operator
-use version; our $VERSION = qv("0.3.1");
-# $Revision: 184 $ $Date: 2008-11-18 09:51:50 -0500 (Tue, 18 Nov 2008) $
-# $Id: EReader.pm 184 2008-11-18 14:51:50Z zed $
+use version; our $VERSION = qv("0.3.2");
+# $Revision: 188 $ $Date: 2008-11-19 15:24:06 -0500 (Wed, 19 Nov 2008) $
+# $Id: EReader.pm 188 2008-11-19 20:24:06Z zed $
 
 # Double-sigils are needed for lexical variables in clear print statements
 ## no critic (Double-sigil dereference)
