@@ -4,9 +4,9 @@ use warnings; use strict; use utf8;
 #use 5.010; # Needed for smart-match operator
 #v5.10 feature use removed until 5.10 is standard on MacOSX and Debian
 use English qw( -no_match_vars );
-use version; our $VERSION = qv("0.3.2");
-# $Revision: 188 $ $Date: 2008-11-19 15:24:06 -0500 (Wed, 19 Nov 2008) $
-# $Id: Mobipocket.pm 188 2008-11-19 20:24:06Z zed $
+use version; our $VERSION = qv("0.3.3");
+# $Revision: 195 $ $Date: 2008-11-21 13:39:10 -0500 (Fri, 21 Nov 2008) $
+# $Id: Mobipocket.pm 195 2008-11-21 18:39:10Z zed $
 
 # Perl Critic overrides:
 ## no critic (Package variable)
@@ -557,7 +557,7 @@ EBook::Tools.
 
 =head2 C<Load($filename)>
 
-Sets C<$self->{filename}> and then loads and parses the file specified
+Sets C<< $self->{filename} >> and then loads and parses the file specified
 by C<$filename>, calling L</ParseRecord(%record)> on every record
 found.
 
@@ -779,8 +779,8 @@ sub ParseRecord :method   ## no critic (Always unpack @_ first)
 =head2 C<ParseRecord0($data)>
 
 Parses the header record and places the parsed values into the hashref
-C<$self->{header}{palm}>, the hashref C<$self->{header}{mobi}>, and
-C<$self->{header}{exth}> by calling L</parse_palmdoc_header()>,
+C<< $self->{header}{palm} >>, the hashref C<< $self->{header}{mobi} >>,
+and C<< $self->{header}{exth} >> by calling L</parse_palmdoc_header()>,
 L</parse_mobi_header()>, and L</parse_mobi_exth()> respectively.
 
 =cut
@@ -870,7 +870,7 @@ dictionary data
 
 =item * Offset 16: Indexes
 
-A number of big-endiant short ints used as index points into the
+A number of big-endian short ints used as index points into the
 dictionary data
 
 =item * Offset ??: Dictionary data
@@ -1160,9 +1160,9 @@ sub ParseRecordHUFF
 =head2 C<ParseRecordImage(\$dataref)>
 
 Parses image records, updating object attributes, most notably adding
-the image data to the hash C<$self->{imagedata}, adding the image
-filename to C<$self->{recindexlinks}, and incrementing
-C<$self->{recindex}>.
+the image data to the hash C<< $self->{imagedata} >>, adding the image
+filename to C<< $self->{recindexlinks} >>, and incrementing
+C<< $self->{recindex} >>.
 
 Takes as an argument a reference to the record data.  Croaks if it
 isn't provided, or isn't a reference.
@@ -1201,7 +1201,7 @@ sub ParseRecordImage :method
 =head2 C<ParseRecordText(\$dataref)>
 
 Parses text records, updating object attributes, most notably
-appending text to C<$self->{text}>.  Takes as an argument a reference
+appending text to C<< $self->{text} >>.  Takes as an argument a reference
 to the record data.
 
 This is called automatically by L</ParseRecord()> and

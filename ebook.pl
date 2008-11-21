@@ -1,8 +1,8 @@
 #!/usr/bin/perl
 use warnings; use strict;
-use version; our $VERSION = qv("0.3.2");
-# $Revision: 188 $ $Date: 2008-11-19 15:24:06 -0500 (Wed, 19 Nov 2008) $
-# $Id: ebook.pl 188 2008-11-19 20:24:06Z zed $
+use version; our $VERSION = qv("0.3.3");
+# $Revision: 199 $ $Date: 2008-11-21 13:49:49 -0500 (Fri, 21 Nov 2008) $
+# $Id: ebook.pl 199 2008-11-21 18:49:49Z zed $
 
 
 =head1 NAME
@@ -1194,7 +1194,7 @@ sub tidyxml
 Unpacks an ebook into its component parts, creating an OPF for them if
 necessary.
 
-=head3 Arguments
+=head3 Options
 
 =over
 
@@ -1258,8 +1258,6 @@ warned that this can occasionally change the formatting, as Tidy isn't
 very forgiving on certain common tricks (such as empty <pre> elements
 with style elements) that abuse the standard.
 
-=back
-
 =item C<--tidycmd>
 
 The tidy executable name.  This has to be a fully qualified pathname
@@ -1269,8 +1267,6 @@ if tidy isn't on the path.  Defaults to 'tidy'.
 
 The safety level to use when running tidy (default is 1).  Potential
 values are:
-
-=over
 
 =item C<$tidysafety < 1>:
 

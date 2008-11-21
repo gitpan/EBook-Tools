@@ -1,9 +1,9 @@
 package EBook::Tools::Unpack;
 use warnings; use strict; use utf8;
 use English qw( -no_match_vars );
-use version; our $VERSION = qv("0.3.2");
-# $Revision: 188 $ $Date: 2008-11-19 15:24:06 -0500 (Wed, 19 Nov 2008) $
-# $Id: Unpack.pm 188 2008-11-19 20:24:06Z zed $
+use version; our $VERSION = qv("0.3.3");
+# $Revision: 195 $ $Date: 2008-11-21 13:39:10 -0500 (Fri, 21 Nov 2008) $
+# $Id: Unpack.pm 195 2008-11-21 18:39:10Z zed $
 
 # Perl Critic overrides:
 ## no critic (Package variable)
@@ -406,17 +406,17 @@ sub detected :method
 =head2 C<detect_format()>
 
 Attempts to automatically detect the format of the input file and set
-the internal object attributes C<$self->{format}> and
-C<$self->{formatinfo}>, where the former is a one-word string used by
+the internal object attributes C<< $self->{format} >> and
+C<< $self->{formatinfo} >>, where the former is a one-word string used by
 the dispatcher to select the correct unpacking method and the latter
 may contain additional detected information (such as a title or
 version).
 
 Croaks if detection fails.
 
-In scalar context, returns C<$self->{format}>.  In list context,
-returns the two element list C<($self->{format},$self->{formatinfo}>
-
+In scalar context, returns C<< $self->{format} >>.  In list context,
+returns the two element list C<< ($self->{format},$self->{formatinfo}) >>
+ 
 This is automatically called by L</new()> if the C<format> argument is
 not specified.
 
