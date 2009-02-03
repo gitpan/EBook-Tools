@@ -4,9 +4,9 @@ use warnings; use strict; use utf8;
 #use 5.010; # Needed for smart-match operator
 #v5.10 feature use removed until 5.10 is standard on MacOSX and Debian
 use English qw( -no_match_vars );
-use version; our $VERSION = qv("0.3.3");
-# $Revision: 195 $ $Date: 2008-11-21 13:39:10 -0500 (Fri, 21 Nov 2008) $
-# $Id: Mobipocket.pm 195 2008-11-21 18:39:10Z zed $
+use version 0.74; our $VERSION = qv("0.4.0");
+# $Revision: 307 $ $Date: 2009-02-03 16:58:39 -0500 (Tue, 03 Feb 2009) $
+# $Id: Mobipocket.pm 307 2009-02-03 21:58:39Z zed $
 
 # Perl Critic overrides:
 ## no critic (Package variable)
@@ -45,7 +45,7 @@ sub import   ## no critic (Always unpack @_ first)
 
 =head1 NAME
 
-EBook::Tools::Mobipocket - Components related to the Mobipocket format.
+EBook::Tools::Mobipocket - Palm::PDB handler for manipulating the Mobipocket format.
 
 =head1 SYNOPSIS
 
@@ -339,7 +339,7 @@ $mobilangcode{53}{0}  = 'zu'; # Zulu
 our $mobigen_cmd = '';
 our $mobidedrm_cmd = '';
 
-our %pdbencoding = (
+my %pdbencoding = (
     '1252' => 'Windows-1252',
     '65001' => 'UTF-8',
     );
@@ -646,7 +646,7 @@ sub ParseRecord :method   ## no critic (Always unpack @_ first)
 
         if($self->drm)
         {
-            debug(2,"DEBUG: record ",$currentrecord,
+            debug(3,"DEBUG: record ",$currentrecord,
                   " is DRM-protected text, skipping");
         }
         elsif($compression == 17480)
@@ -654,12 +654,12 @@ sub ParseRecord :method   ## no critic (Always unpack @_ first)
             # HUFF/CDIC-compressed text is skipped on the first pass,
             # since uncompressing it requires data from records that
             # aren't parsed until later.
-            debug(2,"DEBUG: record ",$currentrecord,
+            debug(3,"DEBUG: record ",$currentrecord,
                   " is HUFF/CDIC-compressed, handled in second pass");
         }
         else
         {
-            debug(2,"DEBUG: record ",$currentrecord,
+            debug(3,"DEBUG: record ",$currentrecord,
                   " is PalmDoc-compressed text");
             $self->ParseRecordText(\$data);
         }
@@ -1525,6 +1525,9 @@ sub uncompress_dictionaryhuffman_records :method
 
     foreach my $recoffset (1 .. $lasttextrecord)
     {
+        local $OUTPUT_AUTOFLUSH = 1;
+        print "Uncompressing record ",$recoffset,"/",$lasttextrecord,"\r"
+            if($recoffset % 10 == 0);
         $compressed = $self->{records}->[$recoffset]->{data};
         croak($subname,"(): no data found in record ",$recoffset,"!\n")
             unless($compressed);
@@ -1533,6 +1536,7 @@ sub uncompress_dictionaryhuffman_records :method
             huff => $self->{huff},
             cdics => $self->{cdics});
     }
+    print "Finished uncompressing text.\n";
     return 1;
 }
 
@@ -1760,7 +1764,7 @@ sub parse_mobi_exth
             last;
         }
         $exthrecord{data} = substr($headerdata,$offset,$exthrecord{length});
-        debug(3,"DEBUG: EXTH record ",$recordpos," [",
+        debug(2,"DEBUG: EXTH record ",$recordpos," [",
               $exthtypes{$exthrecord{type}},"] has ", 
               $exthrecord{length}, " bytes");
         push(@exthrecords,\%exthrecord);
@@ -2517,8 +2521,8 @@ sub pukall_cipher_1
 
 =head2 C<system_mobidedrm(%args)>
 
-Runs python on a copy of MobiDeDrm.py if it is available (not included
-with this distribution) to downconvert a Mobipocket file.
+Runs python on a copy of C<MobiDeDrm.py> if it is available (not
+included with this distribution) to downconvert a Mobipocket file.
 
 Returns the output filename on success, or undef otherwise.
 
@@ -2812,7 +2816,7 @@ sub uncompress_dictionaryhuffman
 
     # Why does $data have to be zero-terminated this way?  Sometimes it
     # runs out of bits otherwise, though.
-    my $data = $args{data} . "\x00";
+    my $data = $args{data} . "\x00\x00";
     my $octets = length($data);
     my $depth = $args{depth} || 0;
     debug(3,"DEBUG: uncompressing ",$octets," octets at depth ",$depth);
@@ -2905,7 +2909,7 @@ sub uncompress_dictionaryhuffman
                 carp($subname,"():\n",
                      "supposedly out of bits, but bit data still exists!\n");
             }
-            debug(2,"DEBUG: returning from depth ",$depth," with '",$text,"'");
+#            debug(2,"DEBUG: returning from depth ",$depth," with '",$text,"'");
             return $text;
         }
 
@@ -3052,6 +3056,11 @@ sub unpack_mobi_language
 infrastructure may be added later to make use of external helpers and
 plugins, direct DRM support will never be added to the main code for
 legal reasons.
+
+=item * Repacking a .prc without fully extracting to OPF and
+completely converting back isn't supported.  This will have to be
+implemented before an interface to perform minor metadata alterations
+can be implemented.
 
 =item * Mobipocket HUFF/CDIC decoding (used mostly on dictionaries)
 isn't well documented.

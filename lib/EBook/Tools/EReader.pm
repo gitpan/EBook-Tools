@@ -1,8 +1,8 @@
 package EBook::Tools::EReader;
 use warnings; use strict; use utf8;
-use version; our $VERSION = qv("0.3.3");
-# $Revision: 195 $ $Date: 2008-11-21 13:39:10 -0500 (Fri, 21 Nov 2008) $
-# $Id: EReader.pm 195 2008-11-21 18:39:10Z zed $
+use version 0.74; our $VERSION = qv("0.4.0");
+# $Revision: 307 $ $Date: 2009-02-03 16:58:39 -0500 (Tue, 03 Feb 2009) $
+# $Id: EReader.pm 307 2009-02-03 21:58:39Z zed $
 
 # Double-sigils are needed for lexical variables in clear print statements
 ## no critic (Double-sigil dereference)
@@ -12,7 +12,7 @@ use version; our $VERSION = qv("0.3.3");
 
 =head1 NAME
 
-EBook::Tools::EReader - Components related to the Fictionwise/PeanutPress eReader format.
+EBook::Tools::EReader - Palm::PDB handler for manipulating the Fictionwise/PeanutPress eReader format.
 
 =head1 SYNOPSIS
 

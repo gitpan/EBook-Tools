@@ -1,8 +1,8 @@
 package EBook::Tools::PalmDoc;
 use warnings; use strict; use utf8;
-use version; our $VERSION = qv("0.3.3");
-# $Revision: 195 $ $Date: 2008-11-21 13:39:10 -0500 (Fri, 21 Nov 2008) $
-# $Id: PalmDoc.pm 195 2008-11-21 18:39:10Z zed $
+use version 0.74; our $VERSION = qv("0.4.0");
+# $Revision: 307 $ $Date: 2009-02-03 16:58:39 -0500 (Tue, 03 Feb 2009) $
+# $Id: PalmDoc.pm 307 2009-02-03 21:58:39Z zed $
 
 # Mixed case subs and the variable %record are inherited from Palm::PDB
 ## no critic (ProhibitAmbiguousNames)
@@ -10,7 +10,7 @@ use version; our $VERSION = qv("0.3.3");
 
 =head1 NAME
 
-EBook::Tools::PalmDoc - Components related to the PalmDoc/PilotDoc/AportisDoc format
+EBook::Tools::PalmDoc - Palm::PDB handler for manipulating the PalmDoc/PilotDoc/AportisDoc format
 
 =head1 SYNOPSIS
 

@@ -1,9 +1,9 @@
 package EBook::Tools::MSReader;
 use warnings; use strict; use utf8;
 use English qw( -no_match_vars );
-use version; our $VERSION = qv("0.3.3");
-# $Revision: 195 $ $Date: 2008-11-21 13:39:10 -0500 (Fri, 21 Nov 2008) $
-# $Id: MSReader.pm 195 2008-11-21 18:39:10Z zed $
+use version 0.74; our $VERSION = qv("0.4.0");
+# $Revision: 307 $ $Date: 2009-02-03 16:58:39 -0500 (Tue, 03 Feb 2009) $
+# $Id: MSReader.pm 307 2009-02-03 21:58:39Z zed $
 
 # Perl Critic overrides:
 ## no critic (Package variable)

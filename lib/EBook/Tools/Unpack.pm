@@ -1,9 +1,9 @@
 package EBook::Tools::Unpack;
 use warnings; use strict; use utf8;
 use English qw( -no_match_vars );
-use version; our $VERSION = qv("0.3.3");
-# $Revision: 195 $ $Date: 2008-11-21 13:39:10 -0500 (Fri, 21 Nov 2008) $
-# $Id: Unpack.pm 195 2008-11-21 18:39:10Z zed $
+use version 0.74; our $VERSION = qv("0.4.0");
+# $Revision: 307 $ $Date: 2009-02-03 16:58:39 -0500 (Tue, 03 Feb 2009) $
+# $Id: Unpack.pm 307 2009-02-03 21:58:39Z zed $
 
 # Perl Critic overrides:
 ## no critic (Package variable)
@@ -16,7 +16,7 @@ use version; our $VERSION = qv("0.3.3");
 
 =head1 NAME
 
-EBook::Tools::Unpack - An object class for unpacking e-book files into their component parts and metadata
+EBook::Tools::Unpack - Object class for unpacking e-book files into their component parts and metadata
 
 =head1 SYNOPSIS
 
@@ -53,6 +53,7 @@ our @EXPORT_OK;
 use Carp;
 use EBook::Tools qw(:all);
 use EBook::Tools::EReader qw(:all);
+use EBook::Tools::IMP qw(:all);
 use EBook::Tools::Mobipocket qw(:all);
 use EBook::Tools::MSReader qw(:all);
 use EBook::Tools::PalmDoc qw(uncompress_palmdoc);
@@ -106,14 +107,6 @@ our %pdbcompression = (
     1 => 'no compression',
     2 => 'PalmDoc compression',
     17480 => 'Mobipocket DRM',
-    );
-
-our %unpack_dispatch = (
-    'ereader'    => \&unpack_ereader,
-    'mobipocket' => \&unpack_mobi,
-    'msreader'   => \&unpack_msreader,
-    'palmdoc'    => \&unpack_palmdoc,
-    'aportisdoc' => \&unpack_palmdoc,
     );
 
 
@@ -467,6 +460,7 @@ sub detect_format :method
 
     # Check for Microsoft Reader
     $ident = substr($headerdata,0,8);
+    debug(3,"DEBUG: MS Reader ident = '$ident'");
     if($ident eq 'ITOLITLS')
     {
         $$self{format} = 'msreader';
@@ -484,6 +478,17 @@ sub detect_format :method
         $$self{format} = 'epub';
         $$self{formatinfo} = '';
         debug(1,"DEBUG: autodetected book format '",$$self{format},"'");
+    }
+
+    # Check for .IMP
+    $ident = substr($headerdata,2,8);
+    $info = unpack('n',substr($headerdata,0,2));
+    if($ident eq 'BOOKDOUG')
+    {
+        $$self{format} = 'imp';
+        $$self{formatinfo} = $info;
+        debug(1,"DEBUG: autodetected book format '",$$self{format},
+              "' version ",$$self{formatinfo});
     }
 
     # Check for miscellaneous zip archive (OEBZip?)
@@ -517,7 +522,11 @@ sub detect_from_mobi_exth :method
     my $subname = ( caller(0) )[3];
     debug(2,"DEBUG[",$subname,"]");
 
-    my @mobiexth = @{$$self{datahashes}{mobiexth}};
+    my @mobiexth;
+    if(defined $self->{datahashes}{mobiexth})
+    {
+        @mobiexth = @{$self->{datahashes}{mobiexth}};
+    }
     my $data;
     my %exthtypes = %EBook::Tools::Mobipocket::exthtypes;
     my %exth_is_int = %EBook::Tools::Mobipocket::exth_is_int;
@@ -622,9 +631,6 @@ sub gen_opf :method   ## no critic (Always unpack @_ first)
     my $detected;
     my $code;
     my $index;
-
-    my @test = [ '1', '2' ];
-    my $testref = \@test;
 
     croak($subname,"(): could not determine OPF filename\n")
         unless($opffile);
@@ -784,6 +790,15 @@ sub unpack :method
         unless($filename);
     my $retval;
 
+    my  %unpack_dispatch = (
+        'ereader'    => \&unpack_ereader,
+        'imp'        => \&unpack_imp,
+        'mobipocket' => \&unpack_mobi,
+        'msreader'   => \&unpack_msreader,
+        'palmdoc'    => \&unpack_palmdoc,
+        'aportisdoc' => \&unpack_palmdoc,
+        );
+
     croak($subname,
           "(): don't know how to handle format '",$$self{format},"'\n")
         if(!$unpack_dispatch{$$self{format}});
@@ -823,8 +838,7 @@ sub unpack_ereader :method
 
     unless($$self{nosave})
     {
-        $self->usedir;
-        
+        my $cwd = usedir($self->{dir});
         if($$self{htmlconvert})
         {
             $textname = $pdb->write_html();
@@ -836,8 +850,40 @@ sub unpack_ereader :method
         $pdb->write_images;
         $pdb->write_unknown_records if($$self{raw});
         $self->gen_opf(textfile => $textname);
+        chdir($cwd);
     }
     return 1;
+}
+
+
+=head2 C<unpack_imp()>
+
+Unpacks SoftBook/GEB/REB/eBookWise (.imp) files.
+
+=cut
+
+sub unpack_imp
+{
+    my $self = shift;
+    my $subname = ( caller(0) )[3];
+    debug(2,"DEBUG[",$subname,"]");
+
+    my $imp = EBook::Tools::IMP->new();
+    $imp->load($self->{file});
+    
+    $self->{detected}->{author} = $imp->author;
+    $self->{detected}->{title} = $imp->title;
+
+    if($self->{raw})
+    {
+        $imp->write_resdir();
+    }
+    
+    $imp->write_text(dir => $self->{dir});
+    $imp->write_images(dir => $self->{dir});
+
+    print {*STDERR} "WARNING: IMP support not yet functional!\n";
+    return 0;
 }
 
 
@@ -870,7 +916,6 @@ sub unpack_mobi :method
                       # record is examined
 
     $mobi->Load($$self{file});
-    $self->usedir unless($$self{nosave});
 
     @records = @{$mobi->{records}};
     croak($subname,"(): no pdb records found!") unless(@records);
@@ -901,6 +946,7 @@ sub unpack_mobi :method
 
     unless($$self{nosave})
     {
+        my $cwd = usedir($self->{dir});
         $mobi->write_text($htmlname);
         $mobi->write_images();
         $self->gen_opf(textfile => $htmlname);
@@ -910,6 +956,7 @@ sub unpack_mobi :method
             debug(1,"Tidying '",$htmlname,"'");
             system_tidy_xhtml($htmlname);
         }
+        chdir($cwd);
     }
     return 1;
 }
@@ -1010,30 +1057,6 @@ sub unpack_palmdoc :method
         $ebook->save;
     }
     return $$self{opffile};
-}
-
-
-=head2 usedir()
-
-Changes the current working directory to the directory specified by
-the object, creating it if necessary.
-
-=cut
-
-sub usedir :method
-{
-    my $self = shift;
-    my $subname = ( caller(0) )[3];
-    debug(2,"DEBUG[",$subname,"]");
-    unless(-d $$self{dir})
-    {
-        debug(2,"  Creating directory '",$$self{dir},"'");
-        mkpath($$self{dir})
-            or croak("Unable to create output directory '",$$self{dir},"'!\n");
-    }
-    chdir($$self{dir})
-        or croak("Unable to change working directory to '",$$self{dir},"'!\n");
-    return 1;
 }
 
 

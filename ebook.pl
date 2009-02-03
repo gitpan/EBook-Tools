@@ -1,8 +1,8 @@
 #!/usr/bin/perl
 use warnings; use strict;
-use version; our $VERSION = qv("0.3.3");
-# $Revision: 199 $ $Date: 2008-11-21 13:49:49 -0500 (Fri, 21 Nov 2008) $
-# $Id: ebook.pl 199 2008-11-21 18:49:49Z zed $
+use version 0.74; our $VERSION = qv("0.4.0");
+# $Revision: 307 $ $Date: 2009-02-03 16:58:39 -0500 (Tue, 03 Feb 2009) $
+# $Id: ebook.pl 307 2009-02-03 21:58:39Z zed $
 
 
 =head1 NAME
@@ -20,6 +20,7 @@ See also L</EXAMPLES>.
 
 use Config::IniFiles;
 use EBook::Tools qw(:all);
+use EBook::Tools::IMP qw(:all);
 use EBook::Tools::Mobipocket qw(:all);
 use EBook::Tools::MSReader qw(:all);
 use EBook::Tools::Unpack;
@@ -46,13 +47,17 @@ use constant EXIT_HELPERERROR   => 31;  # Helper command exited improperly
 my $defaultconfig = slurp(\*DATA);
 my $configdir = userconfigdir();
 my $configfile = $configdir . '/config.ini';
-my $config = Config::IniFiles->new( -file => $configfile );
+my $config;
+if(-f $configfile)
+{ 
+    $config = Config::IniFiles->new( -file => $configfile );
+}
 $config = Config::IniFiles->new() unless($config);
 #$config->read($configfile);
 
 # Tidysafety requires special handling, since 0 is a valid value
 my $tidysafety = $config->val('config','tidysafety');
-undef($tidysafety) if($tidysafety eq '');
+undef($tidysafety) if(defined($tidysafety) and $tidysafety eq '');
 
 
 #####################################
@@ -61,15 +66,18 @@ undef($tidysafety) if($tidysafety eq '');
 
 my %opt = (
     'author'      => '',
+    'category'    => undef,
     'compression' => undef,
     'dir'         => '',
     'fileas'      => '',
-    'filename'    => '',
+    'firstname'   => undef,
     'help'        => 0,
     'htmlconvert' => 0,
-    'id'          => '',
-    'inputfile'   => '',
+    'identifier'  => undef,
+    'input'       => '',
     'key'         => '',
+    'lastname'    => undef,
+    'middlename'  => undef,
     'mimetype'    => '',
     'mobi'        => 0,
     'mobigencmd'  => $config->val('helpers','mobigen'),
@@ -79,25 +87,29 @@ my %opt = (
     'opf20'       => 0,
     'opffile'     => '',
     'raw'         => 0,
+    'subcategory' => undef,
     'tidy'        => 0,
     'tidycmd'     => $config->val('helpers','tidy'),
     'tidysafety'  => $tidysafety,
-    'title'       => '',
+    'title'       => undef,
     'verbose'     => $config->val('config','debug') || 0,
     );
 
 GetOptions(
     \%opt,
     'author=s',
+    'category|cat=s',
     'compression|c=i',
     'dir|d=s',
     'fileas=s',
-    'filename|file|f=s',
+    'firstname=s',
     'help|h|?',
     'htmlconvert',
-    'id=s',
-    'inputfile|infile=s',
+    'identifier|id=s',
+    'input|i=s',
     'key|pid=s',
+    'lastname=s',
+    'middlename=s',
     'mimetype|mtype=s',
     'mobi|m',
     'mobigencmd|mobigen=s',
@@ -107,6 +119,8 @@ GetOptions(
     'oeb12',
     'opf20',
     'opffile|opf=s',
+    'output|o=s',
+    'subcategory|subcat=s',
     'tidy',
     'tidycmd',
     'tidysafety|ts=i',
@@ -141,7 +155,9 @@ my %dispatch = (
     'config'      => \&config,
     'fix'         => \&fix,
     'genepub'     => \&genepub,
+    'genimp'      => \&genimp,
     'genmobi'     => \&genmobi,
+    'impmeta'     => \&impmeta,
     'setmeta'     => \&setmeta,
     'splitmeta'   => \&splitmeta,
     'splitpre'    => \&splitpre,
@@ -190,6 +206,8 @@ Adds a documents to both the book manifest and spine.
 The OPF file to modify.  If not specified one will be searched for in
 the current directory.
 
+=item C<--identifier>
+
 =item C<--id>
 
 The ID attribute to use for the added manifest item.  This is
@@ -215,7 +233,7 @@ sub adddoc
 {
     my ($newdoc) = @_;
     my $opffile = $opt{opffile};
-    my $id = $opt{id};
+    my $id = $opt{identifier};
     my $mtype = $opt{mimetype};
 
     my $ebook = EBook::Tools->new();
@@ -250,6 +268,8 @@ for any local files referenced by existing manifest items.
 The OPF file to modify.  If not specified one will be searched for in
 the current directory.
 
+=item C<--identifier>
+
 =item C<--id>
 
 The ID attribute to use for the added manifest item.  This is
@@ -275,7 +295,7 @@ sub additem
 {
     my ($newitem) = @_;
     my $opffile = $opt{opffile};
-    my $id = $opt{id};
+    my $id = $opt{identifier};
     my $mtype = $opt{mimetype};
 
     if(!$id)
@@ -767,9 +787,9 @@ Generate a .epub book from existing OPF data.
 
 =over
 
-=item C<--inputfile filename.opf>
+=item C<--input filename.opf>
 
-=item C<--infile filename.opf>
+=item C<--i filename.opf>
 
 =item C<--opffile filename.opf>
 
@@ -779,11 +799,9 @@ Use the specified OPF file.  This can also be specified as the first
 non-option argument, which will override this option if it exists.  If
 no file is specified, one will be searched for.
 
-=item C<--filename bookname.epub>
+=item C<--output bookname.epub>
 
-=item C<--file bookname.epub>
-
-=item C<-f bookname.epub>
+=item C<-o bookname.epub>
 
 Use the specified name for the final output file.  If not specified,
 the bok will have the same filename as the OPF file, with the
@@ -832,6 +850,87 @@ sub genepub
 }
 
 
+=head2 C<genimp>
+
+Generate a eBookwise .imp book from a .RES directory
+
+=head3 Options
+
+=over
+
+=item C<--input DIRNAME.RES>
+
+=item C<-i DIRNAME.RES>
+
+Specifies the resource directory to use for input.  A valid resource
+directory will contain at least a C<RSRC.INF> file, a C<DATA.FRK>
+file, and several other files with four-capital-letter filenames.
+
+This can also be specified as the first non-option argument, which
+will override this option if it exists.  If not specified, the current
+directory will be used.
+
+=item C<--output bookname.epub>
+
+=item C<-o bookname.epub>
+
+Use the specified name for the final output file.  If not specified,
+the book will have the same filename as the input, with the extension
+changed to C<.imp>.
+
+=back
+
+=head3 Examples
+
+ ebook genimp MyUnpackedBook.RES MyBook.imp
+ ebook genimp --resdir ../MyUnpackedBook.RES -f imp/MyBook.imp
+
+=cut
+
+sub genimp
+{
+    my ($input,$output) = @_;
+    my $ebook;
+    my $retval;
+
+    $input ||= $opt{input};
+    $input ||= '.';
+    $output ||= $opt{output};
+
+    if(! $input)
+    {
+        print {*STDERR} "Resource directory not specified!\n";
+        exit(EXIT_BADOPTION);
+    }
+
+    if(! -d $input)
+    {
+        print {*STDERR} "Resource directory '",$input,"' not found!\n";
+        exit(EXIT_BADOPTION);
+    }
+
+    if(! $output)
+    {
+        print {*STDERR} "Output file not specified!\n";
+        exit(EXIT_BADOPTION);
+    }
+
+    my $imp = EBook::Tools::IMP->new();
+    if(! $imp->load_resdir($input) )
+    {
+        print {*STDERR} ("Failed to load from resource directory '",
+                         $input,"'!\n");
+        exit(EXIT_BADINPUT);
+    }
+    if(! $imp->write_imp($output) or ! -f $output)
+    {
+        print {*STDERR} ("Failed to generate '",$output,"'!\n");
+        exit(EXIT_BADOUTPUT);
+    }
+    exit(EXIT_SUCCESS);
+}
+
+
 =head2 C<genmobi>
 
 Generate a Mobipocket .mobi/.prc book from OPF, HTML, or ePub input.
@@ -840,24 +939,18 @@ Generate a Mobipocket .mobi/.prc book from OPF, HTML, or ePub input.
 
 =over
 
-=item C<--inputfile filename>
+=item C<--input filename>
 
-=item C<--infile filename>
-
-=item C<--opffile filename.opf>
-
-=item C<--opf filename.opf>
+=item C<--i filename>
 
 Use the specified file for input.  Valid formats are OPF, HTML, and
 ePub.  This can also be specified as the first non-option argument,
 which will override this option if it exists.  If no file is
 specified, an OPF file in the current directory will be searched for.
 
-=item C<--filename bookname.epub>
+=item C<--output bookname.epub>
 
-=item C<--file bookname.epub>
-
-=item C<-f bookname.epub>
+=item C<-o bookname.epub>
 
 Use the specified name for the final output file.  If not specified,
 the book will have the same filename as the input file, with the
@@ -904,8 +997,7 @@ sub genmobi
     my $ebook;
     my $retval;
 
-    $infile = $opt{inputfile} if(!$infile);
-    $infile = $opt{opffile} if(!$infile);
+    $infile = $opt{input} if(!$infile);
     $infile = find_opffile() if(!$infile);
 
     if(!$infile)
@@ -914,7 +1006,7 @@ sub genmobi
         exit(EXIT_BADOPTION);
     }
 
-    $outfile = $opt{filename} if(!$outfile);
+    $outfile = $opt{output} if(!$outfile);
 
     if(!find_mobigen())
     {
@@ -936,10 +1028,114 @@ sub genmobi
 }
 
 
+=head2 C<impmeta>
+
+Set specific metadata values in an ETI .imp file.  
+
+=head3 Options
+
+=over
+
+=item * C<--input filename.imp>
+
+=item * C<-i filename.imp>
+
+Specify the input filename.  This can also be specified as the first
+argument, in which case the -i option will be ignored.
+
+=item * C<--output modified.imp>
+
+=item * C<-o modified.imp>
+
+Specify the output filename.  If not specified, the input file will be
+overwritten.
+
+=item * C<--identifier>
+
+Specify the identifier metadata.
+
+=item * C<--category>
+
+=item * C<--cat>
+
+Specify the category metadata.
+
+=item * C<--subcategory>
+
+=item * C<--subcat>
+
+Specify the subcategory metadata.
+
+=item * C<--title>
+
+Specify the title metadata.
+
+=item * C<--lastname>
+
+Specify the author last name metadata.
+
+=item * C<--middlename>
+
+Specify the author middle name metadata.
+
+=item * C<--firstname>
+
+Specify the author first name metadata.  Note that IMP files commonly
+place the full name in this component, and leave the middlename and
+lastname entries blank.
+
+=back
+
+=head3 Examples
+
+ ebook impmeta mybook.imp --title 'Fixed Title' --lastname 'John Q. Brandy'
+ ebook impmeta -i mybook.imp -o fixed.imp --title 'Fixed Title'
+
+=cut
+
+sub impmeta
+{
+    my ($input) = @_;
+    $input ||= $opt{input} if($opt{input});
+    my $output = $opt{output};
+    
+    unless($input)
+    {
+        print "You must specify an input file.\n";
+        exit(EXIT_BADOPTION);
+    }
+    $output ||= $input;
+
+    my $imp = EBook::Tools::IMP->new();
+    if(! $imp->load($input))
+    {
+        print "Failed to load '",$input,"' -- aborting!\n";
+        exit(EXIT_BADINPUT);
+    }
+
+    $imp->set_book_properties(
+        'identifier'  => $opt{identifier},
+        'category'    => $opt{category},
+        'subcategory' => $opt{subcategory},
+        'title'       => $opt{title},
+        'lastname'    => $opt{lastname},
+        'middlename'  => $opt{middlename},
+        'firstname'   => $opt{firstname}
+        );
+
+    if(! $imp->write_imp($output) )
+    {
+        print "Failed to write '",$output,"' -- aborting!\n";
+        exit(EXIT_BADOUTPUT);
+    }
+    exit(EXIT_SUCCESS);
+}
+
+
 =head2 C<setmeta>
 
-Set specific metadata values on existing OPF data, creating a new
-element only if none exists.
+Set specific metadata values on an OPF file, creating a new entry only
+if none exists.
 
 Both the element to set and the value are specified as additional
 arguments, not as options.
@@ -962,11 +1158,11 @@ attempt to find one in the current directory.
 Specifies the 'file-as' attribute when setting an author.  Has no
 effect on other elements.
 
+=item * C<--identifier>
+
 =item * C<--id>
 
-Specifies the ID to assign to the element
-
-
+Specifies the ID to assign to the element.
 
 =back
 
@@ -1002,7 +1198,7 @@ sub setmeta
 
     my $opffile = $opt{opffile};
     my $fileas = $opt{fileas};
-    my $id = $opt{id};
+    my $id = $opt{identifier};
 
     my $ebook = EBook::Tools->new();
     $ebook->init($opffile);
@@ -1198,9 +1394,8 @@ necessary.
 
 =over
 
-=item C<--filename>
-=item C<--file>
-=item C<-f>
+=item C<--input>
+=item C<-i>
 
 The filename of the ebook to unpack.  This can also be specified as
 the first non-option argument, in which case it will override the
@@ -1299,7 +1494,7 @@ warnings.
 =head3 Examples
 
  ebook unpack mybook.pdb My_Book --author "By Me"
- ebook unpack -f mybook.pdb -d My_Book --author "By Me"
+ ebook unpack -i mybook.pdb -d My_Book --author "By Me"
 
 Both of the above commands do the same thing
 
@@ -1308,7 +1503,7 @@ Both of the above commands do the same thing
 sub unpack
 {
     my ($filename,$dir) = @_;
-    $filename = $filename || $opt{filename};
+    $filename = $filename || $opt{input};
     $dir = $dir || $opt{dir};
     
     unless($filename)
