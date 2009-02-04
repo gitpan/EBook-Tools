@@ -1,8 +1,8 @@
 #!/usr/bin/perl
 use warnings; use strict;
 use version 0.74; our $VERSION = qv("0.4.0");
-# $Revision: 307 $ $Date: 2009-02-03 16:58:39 -0500 (Tue, 03 Feb 2009) $
-# $Id: ebook.pl 307 2009-02-03 21:58:39Z zed $
+# $Revision: 304 $ $Date: 2009-02-03 16:31:58 -0500 (Tue, 03 Feb 2009) $
+# $Id: ebook.pl 304 2009-02-03 21:31:58Z zed $
 
 
 =head1 NAME

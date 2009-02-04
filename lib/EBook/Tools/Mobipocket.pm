@@ -4,9 +4,9 @@ use warnings; use strict; use utf8;
 #use 5.010; # Needed for smart-match operator
 #v5.10 feature use removed until 5.10 is standard on MacOSX and Debian
 use English qw( -no_match_vars );
-use version 0.74; our $VERSION = qv("0.4.0");
-# $Revision: 307 $ $Date: 2009-02-03 16:58:39 -0500 (Tue, 03 Feb 2009) $
-# $Id: Mobipocket.pm 307 2009-02-03 21:58:39Z zed $
+use version 0.74; our $VERSION = qv("0.4.1");
+# $Revision: 308 $ $Date: 2009-02-04 10:56:30 -0500 (Wed, 04 Feb 2009) $
+# $Id: Mobipocket.pm 308 2009-02-04 15:56:30Z zed $
 
 # Perl Critic overrides:
 ## no critic (Package variable)

@@ -1,8 +1,8 @@
 package EBook::Tools::PalmDoc;
 use warnings; use strict; use utf8;
-use version 0.74; our $VERSION = qv("0.4.0");
-# $Revision: 307 $ $Date: 2009-02-03 16:58:39 -0500 (Tue, 03 Feb 2009) $
-# $Id: PalmDoc.pm 307 2009-02-03 21:58:39Z zed $
+use version 0.74; our $VERSION = qv("0.4.1");
+# $Revision: 308 $ $Date: 2009-02-04 10:56:30 -0500 (Wed, 04 Feb 2009) $
+# $Id: PalmDoc.pm 308 2009-02-04 15:56:30Z zed $
 
 # Mixed case subs and the variable %record are inherited from Palm::PDB
 ## no critic (ProhibitAmbiguousNames)
