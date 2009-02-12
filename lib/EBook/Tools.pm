@@ -3,9 +3,9 @@ use warnings; use strict; use utf8;
 #use 5.010; # Needed for smart-match operator
 #v5.10 feature use removed until 5.10 is standard on MacOSX and Debian
 use English qw( -no_match_vars );
-use version 0.74; our $VERSION = qv("0.4.2");
-# $Revision: 313 $ $Date: 2009-02-06 09:52:15 -0500 (Fri, 06 Feb 2009) $
-# $Id: Tools.pm 313 2009-02-06 14:52:15Z zed $
+use version 0.74; our $VERSION = qv("0.4.3");
+# $Revision: 320 $ $Date: 2009-02-12 15:15:32 -0500 (Thu, 12 Feb 2009) $
+# $Id: Tools.pm 320 2009-02-12 20:15:32Z zed $
 
 #use warnings::unused;
 
@@ -6367,15 +6367,20 @@ sub split_metadata
     $metafile = $filebase . ".opf" if(!$metafile);
     $htmlfile = $filebase . "-html.html";
 
+    debug(2,"DEBUG: metahtml='",$metahtmlfile,"'  meta='",$metafile,
+          "  html='",$htmlfile,"'");
+
     # Move existing output files to avoid overwriting them
     if(-f $metafile)
     {
+        debug(3, "DEBUG: moving metafile '",$metafile,"'");
         croak ($subname,"(): output file '",$metafile,
                "' exists and could not be moved!")
             if(! rename($metafile,"$metafile.backup") );
     }
     if(-f $htmlfile)
     {
+        debug(3, "DEBUG: moving htmlfile '",$htmlfile,"'");
         croak ($subname,"(): output file '",$htmlfile,
                "' exists and could not be moved!")
             if(! rename($htmlfile,"$metafile.backup") );

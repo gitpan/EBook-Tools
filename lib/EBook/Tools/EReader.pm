@@ -1,8 +1,8 @@
 package EBook::Tools::EReader;
 use warnings; use strict; use utf8;
-use version 0.74; our $VERSION = qv("0.4.2");
-# $Revision: 311 $ $Date: 2009-02-06 09:49:58 -0500 (Fri, 06 Feb 2009) $
-# $Id: EReader.pm 311 2009-02-06 14:49:58Z zed $
+use version 0.74; our $VERSION = qv("0.4.3");
+# $Revision: 320 $ $Date: 2009-02-12 15:15:32 -0500 (Thu, 12 Feb 2009) $
+# $Id: EReader.pm 320 2009-02-12 20:15:32Z zed $
 
 # Double-sigils are needed for lexical variables in clear print statements
 ## no critic (Double-sigil dereference)
