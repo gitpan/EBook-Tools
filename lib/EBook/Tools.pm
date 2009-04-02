@@ -3,9 +3,9 @@ use warnings; use strict; use utf8;
 #use 5.010; # Needed for smart-match operator
 #v5.10 feature use removed until 5.10 is standard on MacOSX and Debian
 use English qw( -no_match_vars );
-use version 0.74; our $VERSION = qv("0.4.3");
-# $Revision: 320 $ $Date: 2009-02-12 15:15:32 -0500 (Thu, 12 Feb 2009) $
-# $Id: Tools.pm 320 2009-02-12 20:15:32Z zed $
+use version 0.74; our $VERSION = qv("0.4.4");
+# $Revision: 321 $ $Date: 2009-04-01 19:22:51 -0400 (Wed, 01 Apr 2009) $
+# $Id: Tools.pm 321 2009-04-01 23:22:51Z zed $
 
 #use warnings::unused;
 
@@ -6364,8 +6364,8 @@ sub split_metadata
     my ($fh_metahtml,$fh_meta,$fh_html);
 
     ($filebase,$filedir,$fileext) = fileparse($metahtmlfile,'\.\w+$');
-    $metafile = $filebase . ".opf" if(!$metafile);
-    $htmlfile = $filebase . "-html.html";
+    $metafile = $filedir . $filebase . ".opf" if(!$metafile);
+    $htmlfile = $filedir . $filebase . "-html.html";
 
     debug(2,"DEBUG: metahtml='",$metahtmlfile,"'  meta='",$metafile,
           "  html='",$htmlfile,"'");
