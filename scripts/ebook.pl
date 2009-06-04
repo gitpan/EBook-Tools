@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use warnings; use strict;
-# $Revision: 319 $ $Date: 2009-02-12 15:11:37 -0500 (Thu, 12 Feb 2009) $
-# $Id: ebook.pl 319 2009-02-12 20:11:37Z zed $
+# $Revision$ $Date$
+# $Id$
 
 
 =head1 NAME

@@ -1,9 +1,7 @@
 package EBook::Tools::LZSS;
 use warnings; use strict; use utf8;
 use English qw( -no_match_vars );
-use version 0.74; our $VERSION = qv("0.4.4");
-# $Revision: 322 $ $Date: 2009-04-01 19:25:38 -0400 (Wed, 01 Apr 2009) $
-# $Id: LZSS.pm 322 2009-04-01 23:25:38Z zed $
+use version 0.74; our $VERSION = qv("0.4.5");
 
 # Perl Critic overrides:
 ## no critic (Package variable)

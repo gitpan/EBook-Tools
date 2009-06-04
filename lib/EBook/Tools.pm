@@ -3,9 +3,7 @@ use warnings; use strict; use utf8;
 #use 5.010; # Needed for smart-match operator
 #v5.10 feature use removed until 5.10 is standard on MacOSX and Debian
 use English qw( -no_match_vars );
-use version 0.74; our $VERSION = qv("0.4.4");
-# $Revision: 321 $ $Date: 2009-04-01 19:22:51 -0400 (Wed, 01 Apr 2009) $
-# $Id: Tools.pm 321 2009-04-01 23:22:51Z zed $
+use version 0.74; our $VERSION = qv("0.4.5");
 
 #use warnings::unused;
 
